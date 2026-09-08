@@ -42,7 +42,7 @@ Try { Set-ExecutionPolicy -ExecutionPolicy 'Bypass' -Scope 'Process' -Force -Err
 
 #region --- RCA logging (dual-surface) -----------------------------------------
 # One call, two audiences:
-#   PSADT log  = human narrative (-Human string) - what helpdesk reads
+#   PSADT log  = human narrative (-Message string) - what helpdesk reads
 #   machine.log + last_run.json = strict key=value lines - what grep/AI/fleet reads
 #   stdout     = machine line - what Intune/PR engines capture
 $rca = [ordered]@{ started = (Get-Date -Format s); phases = @() }
@@ -53,9 +53,9 @@ $probGloss = @{
     31 = 'not working properly'; 43 = 'reported a problem'; 45 = 'not connected'; 52 = 'unsigned/corrupt driver'
 }
 function Write-Rca {
-    param([string]$Phase, [string]$Body, [string]$Human, [switch]$Record)
+    param([string]$Phase, [string]$Body, [string]$Message, [switch]$Record)
     $machine = "HW9TN|phase=$Phase|$Body"
-    $pretty  = if ($Human) { $Human } else { $machine }
+    $pretty  = if ($Message) { $Message } else { $machine }
     Write-Log -Message $pretty -Source 'HW9TN'
     Write-Output $machine
     if ($script:machineLog) { Add-Content -Path $script:machineLog -Value $machine -Encoding UTF8 }
@@ -137,7 +137,7 @@ Try {
     Add-Content -Path $script:machineLog -Value "HW9TN|run-start|$(Get-Date -Format s)" -Encoding UTF8
     $model = if ($family -eq 'PA') { 'Dell Pro 13/14 Premium' } else { 'Dell Pro 14 Plus' }
     Write-Rca 'PRE' "family=$family|pkg=$($pkg.id)|ver=$($pkg.version)|stage=$stage" `
-        -Human "Target confirmed: $model ($($sig.Split(' ')[0])) - package $($pkg.id) v$($pkg.version). Working folder: $stage" -Record
+        -Message "Target confirmed: $model ($($sig.Split(' ')[0])) - package $($pkg.id) v$($pkg.version). Working folder: $stage" -Record
 
     ## ===== PRE: forensic snapshot (the RCA evidence) =====
     $os = Get-CimInstance Win32_OperatingSystem
@@ -147,14 +147,14 @@ Try {
                 Where-Object { $_.DisplayName -match 'Dell Command' }) { 'present' } else { 'absent' }
     Write-Rca 'ctx' ("bios=$bios|build={0}|os_changed={1:yyyy-MM-dd}|winold={2}|dcu={3}" -f `
         $os.BuildNumber, $os.InstallDate, (Test-Path 'C:\Windows.old'), $dcu) `
-        -Human ("System: BIOS {0}, Windows build {1}, last feature update {2:yyyy-MM-dd}, Windows.old {3}, Dell Command Update {4}." -f `
+        -Message ("System: BIOS {0}, Windows build {1}, last feature update {2:yyyy-MM-dd}, Windows.old {3}, Dell Command Update {4}." -f `
             $bios, $os.BuildNumber, $os.InstallDate, $(if (Test-Path 'C:\Windows.old') { 'present' } else { 'gone' }), $dcu) -Record
 
     $gfxDev = Get-PnpDevice -Class Display -PresentOnly | Where-Object { (Get-Prop $_.InstanceId 'DEVPKEY_Device_DriverProvider') -match 'Intel' } | Select-Object -First 1
     $gfxVer = if ($gfxDev) { Get-Prop $gfxDev.InstanceId 'DEVPKEY_Device_DriverVersion' } else { 'missing' }
     $ish = Get-DepVer 'Integrated Sensor Solution'; $sio = Get-DepVer 'Serial IO'; $me = Get-DepVer 'Management Engine'
     Write-Rca 'dep' ("ish={0}|serialio={1}|me={2}|gfx={3}" -f $ish, $sio, $me, $gfxVer) `
-        -Human ("Dependencies: ISH {0}, Serial IO {1}, ME {2}, Graphics {3}.{4}" -f $ish, $sio, $me, $gfxVer, `
+        -Message ("Dependencies: ISH {0}, Serial IO {1}, ME {2}, Graphics {3}.{4}" -f $ish, $sio, $me, $gfxVer, `
             $(if (($ish -eq 'missing') -or ($sio -eq 'missing') -or ($me -eq 'missing')) { '  <-- MISSING DEPENDENCY - camera cannot work until installed (Dell KB 000248760)' } else { '' })) -Record
 
     $preState = @{}
@@ -172,7 +172,7 @@ Try {
         $gloss = if ($prob -and $prob -ne 0 -and $probGloss[[int]$prob]) { " - $($probGloss[[int]$prob])" } else { '' }
         $drvTxt = if ($cur) { "driver $cur" } else { 'NO DRIVER' }
         Write-Rca 'dev' ("$short|drv=$(if ($cur) { $cur } else { 'NONE' })|inf=$(if ($inf) { $inf } else { '-' })|prov=$(if ($prov) { $prov } else { '-' })|prob=$prob") `
-            -Human ("  {0}: {1}, provider {2}{3}{4}" -f $t.n, $drvTxt, $(if ($prov) { $prov } else { '?' }), `
+            -Message ("  {0}: {1}, provider {2}{3}{4}" -f $t.n, $drvTxt, $(if ($prov) { $prov } else { '?' }), `
                 $(if ($prob -and $prob -ne 0) { ", problem code $prob" } else { '' }), $gloss)
     }
 
@@ -192,14 +192,14 @@ Try {
     $fwTarget = '133.152.66.0'
     $fwState = if ($fwCurrent) { if ([version]$fwCurrent -ge [version]$fwTarget) { 'CURRENT' } else { 'OLD' } } else { 'absent' }
     Write-Rca 'fw' ("$(if ($fwLine) { $fwLine -join '|' } else { 'values=none-found' })|proxy_state=$fwState") `
-        -Human ("  Camera bridge firmware payload: $(if ($fwCurrent) { "$fwCurrent ($fwState)" } else { 'not installed' }).") -Record
+        -Message ("  Camera bridge firmware payload: $(if ($fwCurrent) { "$fwCurrent ($fwState)" } else { 'not installed' }).") -Record
 
     $firstErr = Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-MF-FrameServer/Camera_FrameServer'; Level = 1, 2 } -Oldest -ErrorAction SilentlyContinue | Select-Object -First 1
     $delta = if ($firstErr) { [int](($firstErr.TimeCreated - $os.InstallDate).TotalHours) } else { $null }
     Write-Rca 'rca' ("first_err={0}|upgraded={1:yyyy-MM-dd HH:mm}|delta={2}" -f `
         $(if ($firstErr) { $firstErr.TimeCreated.ToString('yyyy-MM-ddTHH:mm') } else { 'none-in-retention' }),
         $os.InstallDate, $(if ($null -ne $delta) { "{0}h" -f $delta } else { 'n/a' })) `
-        -Human ("  History: $(if ($firstErr) { "first camera failure logged $($firstErr.TimeCreated.ToString('yyyy-MM-dd HH:mm')); feature update landed $($os.InstallDate.ToString('yyyy-MM-dd HH:mm')) - $delta hours apart$(if ($delta -ge 0 -and $delta -le 72) { '  <-- broke right after the upgrade' } else { '' })" } else { 'no camera failures in retained logs; nothing to correlate with the feature update' }).") -Record
+        -Message ("  History: $(if ($firstErr) { "first camera failure logged $($firstErr.TimeCreated.ToString('yyyy-MM-dd HH:mm')); feature update landed $($os.InstallDate.ToString('yyyy-MM-dd HH:mm')) - $delta hours apart$(if ($delta -ge 0 -and $delta -le 72) { '  <-- broke right after the upgrade' } else { '' })" } else { 'no camera failures in retained logs; nothing to correlate with the feature update' }).") -Record
     Save-RcaJson $stage
 
     ## ===== WAIT: patient, camera-idle only =====
@@ -208,17 +208,17 @@ Try {
     while ((Get-Date) -lt $deadline -and (Test-CameraStreaming)) {
         $poll++
         Write-Rca 'WAIT' ("camera=busy|app=$($script:camHolder)|poll=$poll|wait=${PollMinutes}m") `
-            -Human "Camera in use (by $($script:camHolder)) - not touching anything; next check in ${PollMinutes}m ($poll)."
+            -Message "Camera in use (by $($script:camHolder)) - not touching anything; next check in ${PollMinutes}m ($poll)."
         Start-Sleep -Seconds ($PollMinutes * 60)
     }
     if (Test-CameraStreaming) {
         Write-Rca 'WAIT' "camera=busy|result=gave-up-after-${MaxWaitMinutes}m" -Record `
-            -Human "Camera stayed in use the whole ${MaxWaitMinutes}m - stopping quietly; the next scheduled run tries again."
+            -Message "Camera stayed in use the whole ${MaxWaitMinutes}m - stopping quietly; the next scheduled run tries again."
         Save-RcaJson $stage
         Exit-Script -ExitCode 3010   # next scheduled run carries patience
     }
     Write-Rca 'WAIT' "camera=idle|polls=$poll" -Record `
-        -Human "Camera is idle - safe to work; proceeding."
+        -Message "Camera is idle - safe to work; proceeding."
 
     ## ===== DL: obtain + verify + extract =====
     $exePath = Join-Path $stage $pkg.exe
@@ -263,7 +263,7 @@ Try {
     Execute-Process -Path 'pnputil.exe' -Parameters '/scan-devices' -CreateNoWindow -PassThru -IgnoreExitCodes '*' -ContinueOnError $true | Out-Null
     Start-Sleep -Seconds 5
     Write-Rca 'INSTALL' "infs=$($infs.Count)|ok=$installed" -Record `
-        -Human "Installed $installed of $($infs.Count) driver packages."
+        -Message "Installed $installed of $($infs.Count) driver packages."
 
     ## ===== CLEANUP: unbound superseded family packages only =====
     $deleted = @(); $skipped = @()
@@ -288,7 +288,7 @@ Try {
     Write-Rca 'CLEANUP' ("deleted={0}|skipped_bound={1}" -f `
         $(if ($deleted) { $deleted -join ',' } else { 'none' }),
         $(if ($skipped) { $skipped -join ',' } else { 'none' })) -Record `
-        -Human ("Old-driver cleanup: $(if ($deleted) { "removed $($deleted.Count) superseded package(s)" } else { 'nothing stale to remove' })$(if ($skipped) { "; kept $($skipped.Count) still in use by a device (they clear at the next restart)" } else { '' }).")
+        -Message ("Old-driver cleanup: $(if ($deleted) { "removed $($deleted.Count) superseded package(s)" } else { 'nothing stale to remove' })$(if ($skipped) { "; kept $($skipped.Count) still in use by a device (they clear at the next restart)" } else { '' }).")
 
     ## ===== POST: verify + diff + (on problems) setupapi slice =====
     Set-Variable -Name 'installPhase' -Value 'Post-Install'
@@ -305,25 +305,25 @@ Try {
         } else { $changed++ }
     }
     Write-Rca 'POST' ("camera=$camCount|prob_nonzero=$postProblems|pending14=$pending|stack_changed=$changed") -Record `
-        -Human ("Result: $(if ($camCount -gt 0 -and $postProblems -eq 0 -and $pending -eq 0) { 'camera present and healthy - done, no restart needed' } elseif ($pending -gt 0) { "installed - $pending device(s) finish at the user's next restart (old driver keeps camera working until then)" } elseif ($camCount -eq 0) { 'PROBLEM: no camera visible after install - capturing evidence' } else { "installed but $postProblems device(s) still report problems - capturing evidence" }) ($changed stack device(s) changed).")
+        -Message ("Result: $(if ($camCount -gt 0 -and $postProblems -eq 0 -and $pending -eq 0) { 'camera present and healthy - done, no restart needed' } elseif ($pending -gt 0) { "installed - $pending device(s) finish at the user's next restart (old driver keeps camera working until then)" } elseif ($camCount -eq 0) { 'PROBLEM: no camera visible after install - capturing evidence' } else { "installed but $postProblems device(s) still report problems - capturing evidence" }) ($changed stack device(s) changed).")
 
     if ($postProblems -gt 0 -or $camCount -eq 0) {
         $slice = Join-Path $stage 'setupapi_camera_slice.log'
         Select-String -Path 'C:\Windows\INF\setupapi.dev.log' -Pattern 'iacamera|hm1092|ov08x40|ov05c10|iactrllogic|iaisp|usbbridge|Vision\.inf' -ErrorAction SilentlyContinue |
             ForEach-Object { "{0}: {1}" -f $_.LineNumber, $_.Line } | Set-Content $slice -Encoding UTF8
         Write-Rca 'POST' "setupapi_slice=$slice" `
-            -Human "  Evidence: Windows driver-install history saved to $slice for troubleshooting."
+            -Message "  Evidence: Windows driver-install history saved to $slice for troubleshooting."
     }
 
     Save-RcaJson $stage
     if ($pending -gt 0 -or $postProblems -gt 0) {
         Write-Rca 'EXIT' "code=3010|verdict=installed-pending-user-reboot|pending=$pending|problems=$postProblems" -Record `
-            -Human "Finished (code 3010): installed and waiting on the user's own restart - nothing forced."
+            -Message "Finished (code 3010): installed and waiting on the user's own restart - nothing forced."
         Save-RcaJson $stage
         Exit-Script -ExitCode 3010
     }
     Write-Rca 'EXIT' 'code=0|verdict=installed-live-no-restart-needed' -Record `
-        -Human "Finished (code 0): camera stack updated live - no restart required."
+        -Message "Finished (code 0): camera stack updated live - no restart required."
     Save-RcaJson $stage
     Exit-Script -ExitCode 0
 }
