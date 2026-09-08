@@ -159,15 +159,17 @@ Installer exit codes: `0` success · `3010` success, restart pending ·
 
 ### Intune Win32 app
 
-1. Copy the extracted Dell driver tree into
-   `deployment/psadt-toolkit/Toolkit/Files/Drivers/`.
+From the `deployment/psadt-toolkit/` folder:
+
+1. Copy the extracted Dell driver tree into `.\Toolkit\Files\Drivers\`.
 2. Create the Intune package with the
    [Microsoft Win32 Content Prep Tool](https://github.com/microsoft/microsoft-win32-content-prep-tool):
    ```bat
    IntuneWinAppUtil.exe -c .\Toolkit -s .\Toolkit\Deploy-Application.exe -o .
    ```
-   This produces `Toolkit.intunewin` — the single-file format an Intune Win32
-   app requires ([preparation documentation](https://learn.microsoft.com/en-us/intune/app-management/deployment/create-win32-package)).
+   This produces `Toolkit.intunewin` in the current folder — the single-file
+   format an Intune Win32 app requires
+   ([preparation documentation](https://learn.microsoft.com/en-us/intune/app-management/deployment/create-win32-package)).
 3. App settings:
    - Install command: `Deploy-Application.exe -DeploymentType Install -DeployMode Silent`
    - Detection rule: script `deployment/app-detection-rule.ps1`
