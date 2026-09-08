@@ -45,6 +45,16 @@ if ($sigg -notmatch 'P[AB]14250') {
     else { Write-Output "NOT-TARGET: no PB14250 signature in SMBIOS fields (got: $sigg)"; exit 0 }
 }
 
+# --- Layer 0.5: OS upgrade context (23H2->25H2 casualty correlation) ---
+# InstallDate resets at each feature update = "last OS change". Windows.old
+# self-expires (~10-30d) = freshest upgrade proof. Informational + correlates
+# with BROKEN verdicts below; never changes the verdict alone.
+$os     = Get-CimInstance Win32_OperatingSystem
+$winOld = Test-Path 'C:\Windows.old'
+$upgradeRecent = (([int]$os.BuildNumber -ge 26100) -and (((Get-Date) - $os.InstallDate).TotalDays -le 90)) -or $winOld
+Write-Output ("UPGRADE-CONTEXT: build {0}, last OS change {1:yyyy-MM-dd}, Windows.old: {2}, recent-upgrade: {3}" -f `
+    $os.BuildNumber, $os.InstallDate, $winOld, $upgradeRecent)
+
 # --- Target table - transcribed from package manifests ---
 # TWO package families, discriminated by Dell subsystem ID in the hardware IDs:
 #   PA = 845M5 A12 (Dell Pro 13/14 Premium, PA13250/PA14250, subsys 0CE3/0CE4, LNL only)
@@ -99,6 +109,13 @@ foreach ($d in $Device) {
             # Layer 3a: problem codes on any stack devnode
             $pc = Get-ProblemCode $d.InstanceId
             if ($pc -and $pc -ne 0) { $stackProblem += "$($t.n) problem code $pc ($($d.Problem))" }
+            # Upgrade-casualty signature: our Intel hardware bound to an inbox/OS
+            # driver (verified property keys: DriverProvider / DriverInfPath)
+            $prov   = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverProvider').Data
+            $infPth = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverInfPath').Data
+            if ($prov -match 'Microsoft' -or $infPth -match 'usbvideo\.inf') {
+                $stackProblem += "$($t.n): Intel hardware on inbox driver ($infPth / $prov) - stack misbound (typical after OS upgrade)"
+            }
             break
         }
     }
@@ -179,8 +196,11 @@ $brkFlag  = $broken.Count -gt 0
 Write-Output ("NEEDS-UPDATE: {0}   CAMERA-BROKEN: {1}" -f $needFlag, $brkFlag)
 if ($brkFlag)   { $broken | ForEach-Object { Write-Output "  BROKEN: $_" } }
 if ($needFlag)  { $needs  | ForEach-Object { Write-Output "  OLD:    $_" } }
+if ($brkFlag -and $upgradeRecent) {
+    Write-Output 'CORRELATION: camera broken + recent OS feature-update activity - consistent with 23H2->25H2 upgrade casualty'
+}
 
-if     ($needFlag -and $brkFlag) { Write-Output 'VERDICT: NEEDS+BROKEN - prime candidate: remediate with HW9TN A13 (exit 3)'; exit 3 }
-elseif ($brkFlag)                { Write-Output 'VERDICT: BROKEN only - driver is current, look elsewhere: ISH prerequisite, BIOS, hardware (exit 2)'; exit 2 }
+if     ($needFlag -and $brkFlag) { Write-Output 'VERDICT: NEEDS+BROKEN - prime candidate: remediate with the camera package now (exit 3)'; exit 3 }
+elseif ($brkFlag)                { Write-Output 'VERDICT: BROKEN only - driver files current; per Dell KB 000248760 check: BIOS camera enabled, then dependency stack (chipset, graphics, ISH, Serial I/O, ME), then hardware (exit 2)'; exit 2 }
 elseif ($needFlag)               { Write-Output 'VERDICT: NEEDS only - routine update, use overnight window (exit 1)'; exit 1 }
 else                             { Write-Output 'VERDICT: HEALTHY+CURRENT - leave alone (exit 0)'; exit 0 }
