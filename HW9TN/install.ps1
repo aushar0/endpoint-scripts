@@ -12,9 +12,11 @@ Exit codes:
 #>
 [CmdletBinding()]
 param(
-    [int]$MaxWaitMinutes = 45,    # short window: Intune's 60-min default timeout never
-                                  # bites; 1618-retry carries long-term patience
-    [int]$PollMinutes = 10
+    [int]$MaxWaitMinutes = 1380,  # ~23h: the install IS the retry engine - set the
+                                  # Intune Win32 "Installation time required" to 1440
+                                  # (its max) and this window catches the first
+                                  # camera-idle moment of the machine's day
+    [int]$PollMinutes = 15
 )
 $ErrorActionPreference = 'Stop'
 $log = Join-Path $env:TEMP "HW9TN_install_$(Get-Date -Format yyyyMMdd_HHmmss).log"

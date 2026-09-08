@@ -26,7 +26,13 @@ app can never catch. They are deliberately separate.
    - Detection rule: use script `detection_rule.ps1`
    - Return codes: 0 success; 3010 success + pending restart (**set restart
      behavior to "Nothing"** - the restart belongs to the user, never to us);
-     1 = retryable (busy guard)
+     1618 = camera busy past the wait window -> Intune retries (3x/5min, then
+     check-in re-evaluation), each retry carrying a fresh wait window
+   - **Installation time required: 1440 (the max).** The script's default wait
+     is 1380 min (~23h): delivery + patience in one run - the install lands on
+     the machine's first camera-idle moment of the day, independent of Intune
+     retry cadence. No local scheduled task needed unless fleet data shows
+     machines stuck >3 days (deferred trigger, see monitor).
    - Install behavior: System
 4. Assignment: Entra dynamic device group on the hardware model, e.g.
    `(device.deviceModel -eq "<exact model string>")` - pull the exact string
