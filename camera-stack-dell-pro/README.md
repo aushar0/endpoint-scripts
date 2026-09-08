@@ -44,6 +44,16 @@ powershell -File .\detection\detect.ps1
 | `deployment/app-detection-rule.ps1` | Detection rule script for the Intune Win32 app ("is the driver at target version?"). |
 | `deployment/psadt-toolkit/` | A complete, unmodified PSAppDeployToolkit 3.10.2 with the install wrapper already in place as `Toolkit\Deploy-Application.ps1`. Add the driver files (below), wrap, deploy. |
 
+## ✨ What this kit does
+
+| Capability | How |
+|---|---|
+| **Detect** | Reads live PnP state: device problem codes, driver versions vs. target, firmware payload level, missing cameras, Frame Server errors — never event logs for the missing-device class (proven invisible). |
+| **Classify** | A four-way verdict that separates *driver-outdated* from *camera-broken* from *disabled-by-choice* — because they have different fixes. |
+| **Remediate** | Installs only when the camera is idle (consent-store streaming check), never prompts, never kills processes, never forces reboots. Restarts ride the user's own reboot; the old driver keeps the camera working until then. |
+| **Clean up** | After binding, removes superseded driver packages from the store — the residue Windows feature updates leave behind and Dell's KB 000248760 blames for these tickets. |
+| **Explain** | Dual-surface logging: a readable narrative log alongside machine-readable `key=value` lines, plus a per-machine JSON snapshot with pre/post diff. |
+
 ## Case study: camera dead after a Windows feature update
 
 Example detector run on an affected machine (output abridged):
@@ -205,6 +215,11 @@ automatically — the forensic record of what the OS did to the camera stack.
 
 ## Testing summary
 
+Every capability claim above is anchored to a run: healthy-camera and
+missing-camera branches executed on live hardware, the package boot-tested
+via the public-artifact path, and the log-invisibility finding established by
+controlled experiment.
+
 - **Package boot test (VM):** the toolkit + wrapper, assembled from this
   repository and run silently, initializes cleanly and exits through the
   hardware gate. Three packaging defects were found and fixed by this test.
@@ -215,6 +230,12 @@ automatically — the forensic record of what the OS did to the camera stack.
   generates vetoed-removal warnings (Kernel-PnP event 1000) and **no
   events at all** afterward — establishing that a missing camera is only
   detectable through device enumeration, which is what the detector reads.
+
+## 🧰 Requirements
+
+- Windows 11 (build 26100+), PowerShell 5.1+
+- Detection: any context (read-only). Installation: admin/SYSTEM.
+- Driver payload from Dell's site (never committed to this repository)
 
 ## References
 
