@@ -1,6 +1,6 @@
 # Camera Stack Kit — Dell Pro (Intel MIPI)
 
-This kit detects and repairs the integrated camera stack on Dell Pro 13/14
+This kit detects and repairs the integrated camera stack on Dell Pro
 laptops: the Intel MIPI camera drivers, the USB bridge, and the presence-sensor
 (Vision) firmware — the components that Windows feature updates commonly break.
 Detection is read-only and safe to run at any time, including during video
@@ -128,7 +128,13 @@ Installer exit codes: `0` success · `3010` success, restart pending ·
 
 1. Copy the extracted Dell driver tree into
    `deployment/psadt-toolkit/Toolkit/Files/Drivers/`.
-2. Wrap the `Toolkit` folder with IntuneWinAppUtil.
+2. Create the Intune package with the
+   [Microsoft Win32 Content Prep Tool](https://github.com/microsoft/microsoft-win32-content-prep-tool):
+   ```bat
+   IntuneWinAppUtil.exe -c .\Toolkit -s .\Toolkit\Deploy-Application.exe -o .
+   ```
+   This produces `Toolkit.intunewin` — the single-file format an Intune Win32
+   app requires ([preparation documentation](https://learn.microsoft.com/en-us/intune/app-management/deployment/create-win32-package)).
 3. App settings:
    - Install command: `Deploy-Application.exe -DeploymentType Install -DeployMode Silent`
    - Detection rule: script `deployment/app-detection-rule.ps1`
@@ -148,13 +154,14 @@ and v4 (all functions it calls have v4 compatibility wrappers).
 
 | Models | Package | Version | Download |
 |---|---|---|---|
-| Dell Pro 14 **Plus** (PB14250) | HW9TN | A13 (80.26100.0.29) | [direct link](https://dl.dell.com/FOLDER14812487M/1/Intel-2D-Imaging-USB-IO-Vision-Driver-for-Camera_HW9TN_WIN64_80.26100.0.29_A13.EXE) |
-| Dell Pro 13/14 **Premium** (PA13250/PA14250) | 845M5 | A12 (80.25982.6.32) | [driver page](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=845m5) |
+| Dell Pro 14 **Plus** (PB14250) | HW9TN | A13 (80.26100.0.29) | [direct link](https://dl.dell.com/FOLDER14812487M/1/Intel-2D-Imaging-USB-IO-Vision-Driver-for-Camera_HW9TN_WIN64_80.26100.0.29_A13.EXE) · [driver page](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=hw9tn) |
+
+Additional Dell Pro models follow the same package pattern — extending the kit
+means adding the package's version table to the detection scripts.
 
 Driver binaries are not redistributed in this repository. Downloads are
-verified before use: Authenticode signer must be Dell, plus SHA-256 when
-published (845M5:
-`D96D301FF7092C4F172EDB2F713BC2626FC3C5FB77C52D1560586DA901FFDB66`).
+verified before use: the Authenticode signer must be Dell, plus SHA-256 when a
+hash is published.
 For air-gapped or test machines, `intune-remediation.ps1 -LocalPackage <path>`
 uses a local copy of the package instead of downloading.
 
@@ -176,9 +183,9 @@ automatically — the forensic record of what the OS did to the camera stack.
 - **Package boot test (VM):** the toolkit + wrapper, assembled from this
   repository and run silently, initializes cleanly and exits through the
   hardware gate. Three packaging defects were found and fixed by this test.
-- **Live hardware (Dell Pro 14 Premium):** model gating, version tables,
-  problem codes, idle-camera detection, firmware registry layout, and the
-  failure-history baseline all verified on target silicon.
+- **Live hardware:** model gating, version tables, problem codes, idle-camera
+  detection, firmware registry layout, and the failure-history baseline all
+  verified on target silicon.
 - **Missing-camera experiment (controlled):** a camera removed while in use
   generates vetoed-removal warnings (Kernel-PnP event 1000) and **no
   events at all** afterward — establishing that a missing camera is only

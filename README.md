@@ -72,7 +72,9 @@ camera-stack-dell-pro/
 | Package | Models | Silicon |
 |---|---|---|
 | HW9TN A13 | Dell Pro 14 **Plus** (PB14250) | Arrow Lake + Lunar Lake |
-| 845M5 A12 | Dell Pro 13/14 **Premium** (PA13250/PA14250) | Lunar Lake |
+
+Additional Dell Pro packages follow the same pattern — extending the kit is a
+version-table swap in the detection scripts.
 
 Each family binds only its own package (strict subsystem matching, verified
 from the INFs). Driver packages themselves are not redistributed here — fetch
