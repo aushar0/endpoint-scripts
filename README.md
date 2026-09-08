@@ -4,8 +4,6 @@ Endpoint engineering toolkit — detection, deployment, and health monitoring
 for driver remediation. Current kit: **Intel camera stack (Dell package
 HW9TN A13, v80.26100.0.29), worked example: Dell Pro 14 Plus (PB14250).**
 
-Part of the ausharCloud tooling.
-
 ## HW9TN camera stack kit (`HW9TN/`)
 
 | File | Job |

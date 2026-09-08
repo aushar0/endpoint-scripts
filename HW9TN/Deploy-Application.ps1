@@ -1,6 +1,6 @@
 <#
 Deploy-Application.ps1 - HW9TN A13 camera stack, PSADT v3.8/3.9 wrapper
-PATIENT-WAIT DESIGN (Austin's call, 2026-09-07): no Show-InstallationWelcome,
+PATIENT-WAIT DESIGN: no Show-InstallationWelcome,
 no prompts, no closing apps, no UI of any kind. The deployment waits silently
 until the camera is not streaming, then installs. Never disturbs a user.
 

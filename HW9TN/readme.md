@@ -1,6 +1,6 @@
 # HW9TN A13 camera stack - deployment package
 
-Kit staged 2026-09-07; lives in the ausharCloud `endpoint-scripts` repo.
+Kit staged 2026-09-07.
 
 ## What you are deploying (3 artifacts, 3 jobs)
 
@@ -8,7 +8,7 @@ Kit staged 2026-09-07; lives in the ausharCloud `endpoint-scripts` repo.
 |---|---|---|---|
 | `Drivers\` + `install.ps1` + `detection_rule.ps1` | Intune **Win32 app** (.intunewin) | YES (~400 MB tree, compresses to ~100 MB) | Installs the driver stack; re-runs are no-ops |
 | `HW9TN_detect.ps1` (parent folder) | Intune **Proactive Remediation** (detection only) | no | Estate-wide camera-HEALTH monitor: the 2x2 (needs/broken) truth table, exit 0/1/2/3 |
-| nothing | Nexthink RA (optional) | no | Instant "who needs it / who's broken" inventory via `[Nxt]::WriteOutputString` |
+| nothing | any remote-execution platform | no | Same detector adapted to your inventory tooling if preferred |
 
 The Win32 app answers "is the driver current?" (its detection rule).
 The Proactive Remediation answers "is the camera HEALTHY?" - including the
@@ -36,9 +36,8 @@ app can never catch. They are deliberately separate.
 
 ## Design decisions baked in
 
-- **No forced reboot anywhere - restarts are user-paced, always.** The
-  unsaved-work rule (Austin, 2026-09-07): nothing in this chain ever forces,
-  schedules, or requests a machine restart on its own. If a device genuinely
+- **No forced reboot anywhere - restarts are user-paced, always.** Nothing in
+  this chain ever forces, schedules, or requests a machine restart on its own. If a device genuinely
   needs restart, install.ps1 exits 3010 with app restart behavior = "Nothing":
   the machine shows pending-restart in the Company Portal, the OLD driver keeps
   the camera working, and the new stack activates at the user's next natural
@@ -46,7 +45,7 @@ app can never catch. They are deliberately separate.
   = pending restart population; anything stuck there for weeks = helpdesk
   nudge material, not a forced reboot. Installing during the day is safe for
   the same reason - busy guard defers, nothing user-visible happens.
-- **No process killing, ever** (Austin's call, 2026-09-07): conferencing apps
+- **No process killing, ever**: conferencing apps
   detected -> exit 1 -> Intune retries next cycle. Overnight schedule makes
   this a non-issue in practice.
 - **Pre-extracted tree, not the Dell EXE**: full control, no DUP reboot
@@ -62,7 +61,7 @@ app can never catch. They are deliberately separate.
 
 ## PSADT variant (Deploy-Application.ps1) - PATIENT-WAIT design
 
-Final doctrine (Austin's call, 2026-09-07): **no Show-InstallationWelcome, no
+Final doctrine: **no Show-InstallationWelcome, no
 prompts, no closing apps, no UI of any kind.** The deployment waits silently
 for the camera to stop streaming, then installs. Both the PSADT wrapper and
 bare install.ps1 use the same loop:
@@ -90,35 +89,11 @@ framework (detection / patient-wait install / health monitor) transfers to
 it by swapping the version table - the Layer-1 regexes already match its
 hardware IDs regardless of subsystem.
 
-## GitHub transport (home -> work computer)
+## Repo content
 
-GitHub is the approved pipe (pastebin = blocked file-sharing). Setup is TWO
-browser steps, then syncing is one command:
-
-1. Create PRIVATE repo `endpoint-scripts` under mibu919 (office-safe name). DONE.
-2. Auth = DEPLOY KEY (chosen over PAT: repo-scoped, no bearer token on disk, no
-   expiration). Public key (generated 2026-09-07, comment endpoint-scripts-sync)
-   added in repo Settings > Deploy keys - **"Allow write access" MUST be checked**
-   (default is read-only; pushes fail with permission denied otherwise).
-   Private key: ~/.ssh/id_ed25519_endpoint_scripts (dedicated, passphrase-less
-   by design - opens exactly this repo, nothing else).
-3. First sync: `powershell -File ..\sync_to_github.ps1 -Init`; after every
-   script-editing session: same command without -Init. Commit history = the
-   changelog Austin wants for "we change scripts all the time."
-
-Work-machine retrieval (nothing installed, no token on the work box):
-- Browser (github.com is approved): open repo > HW9TN > copy file contents, or
-  Code > Download ZIP. Private repo + his normal browser login = fine.
-- Or `git clone` if git exists there (auth via his GitHub browser login).
-
-Rules baked in: this is the ausharCloud public tool repo — **no employer-specific
-info ever** (org names, ticket refs, internal paths, environment details).
-Hardware model names and public driver versions are fine — public knowledge,
-no employer linkage. The sync script ENFORCES this with a pre-push OE guard
-(fails the sync if employer strings appear). Scripts ONLY in the repo - never
-the 415 MB Dell driver payload (Dell's copyrighted binaries; target machines
-pull HW9TN from Dell directly); mirror lives at ~\repos\endpoint-scripts
-OUTSIDE the zCode tree so zCode's local-only-git rule stays untouched.
+Scripts and docs only — never the vendor driver payload. The HW9TN package
+(Dell's copyrighted binaries, ~415 MB extracted) is fetched directly from
+Dell; see "Model coverage" above for the exact package and supported systems.
 
 ## Open items
 
