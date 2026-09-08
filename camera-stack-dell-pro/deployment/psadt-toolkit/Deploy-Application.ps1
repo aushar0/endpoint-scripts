@@ -42,7 +42,7 @@ Try { Set-ExecutionPolicy -ExecutionPolicy 'Bypass' -Scope 'Process' -Force -Err
 
 #region --- RCA logging (dual-surface) -----------------------------------------
 # One call, two audiences:
-#   PSADT log  = human narrative (-Message string) - what helpdesk reads
+#   PSADT log  = readable narrative (-Message string) - what support reads
 #   machine.log + last_run.json = strict key=value lines - what grep/AI/fleet reads
 #   stdout     = machine line - what Intune/PR engines capture
 $rca = [ordered]@{ started = (Get-Date -Format s); phases = @() }

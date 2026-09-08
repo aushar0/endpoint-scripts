@@ -192,7 +192,7 @@ uses a local copy of the package instead of downloading.
 
 | Location | Audience | Format |
 |---|---|---|
-| `C:\Windows\Logs\Software\...CameraStack...log` (PSADT log) | people | plain-English narrative, problem codes translated to text |
+| `C:\Windows\Logs\Software\...CameraStack...log` (PSADT log) | operators | plain-English narrative, problem codes translated to text |
 | `C:\ProgramData\DellCamera\<package>\machine.log` | tools / grep / fleet analysis | strict `key=value` lines, one per event |
 | `C:\ProgramData\DellCamera\<package>\last_run.json` | tooling / support | full pre/post snapshot of the run |
 | stdout | Intune / Remediations reporting | machine lines |

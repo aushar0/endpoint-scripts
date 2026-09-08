@@ -31,7 +31,7 @@ one kit depends on another.
   are fetched from their publisher at deploy time and verified (Authenticate
   signer + hash where published).
 - **Dual-surface logging** wherever a kit acts on a machine: plain-English
-  narrative for humans, strict `key=value` lines for tooling, plus a
+  narrative for operators, strict `key=value` lines for tooling, plus a
   per-machine JSON snapshot.
 - **Vendor scaffolding** (e.g., the bundled PSAppDeployToolkit) stays
   unmodified in its own subtree with license intact.
