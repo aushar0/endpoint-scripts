@@ -84,6 +84,38 @@ try {
     # Trigger re-enumeration so staged drivers bind to any raw/failing devices now
     & pnputil.exe /scan-devices | Out-Null
 
+    # --- Old-driver cleanup: the DUP's removal step, deferred until SAFE ---
+    # Delete superseded family packages from the store ONLY when (a) same
+    # OriginalName has a higher version remaining (the new one is never
+    # deleted even while unbound during a pending reboot), and (b) no present
+    # device is bound to them. Devices still on the old driver (pending
+    # natural restart) keep their package until a later sweep.
+    $familyInfs = 'iacamera64.inf','hm1092.inf','ov05c10.inf','ov08x40.inf','iactrllogic64.inf',
+                  'iaisp64.inf','usbbridge.inf','usbgpio.inf','usbi2c.inf','vision.inf','visionextension.inf'
+    try {
+        $drivers = Get-WindowsDriver -Online -ErrorAction Stop |
+            Where-Object { $_.OriginalFileName -and ($familyInfs -contains $_.OriginalFileName.ToLower()) }
+        if ($drivers) {
+            $boundInfs = @(Get-PnpDevice -PresentOnly | ForEach-Object {
+                (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_DriverInfPath').Data
+            } | Where-Object { $_ })
+            foreach ($origName in ($drivers | Select-Object -ExpandProperty OriginalFileName -Unique)) {
+                $set  = $drivers | Where-Object OriginalFileName -eq $origName
+                $keep = $set | Sort-Object Version -Descending | Select-Object -First 1
+                foreach ($p in ($set | Where-Object Driver -ne $keep.Driver)) {
+                    if ($boundInfs -contains $p.Driver) {
+                        Write-Output "CLEANUP-SKIP: $($p.Driver) ($origName v$($p.Version)) - still bound to a device"
+                    } else {
+                        Write-Output "CLEANUP-DELETE: $($p.Driver) ($origName v$($p.Version)) - unbound, superseded"
+                        & pnputil.exe /delete-driver $p.Driver 2>&1 | ForEach-Object { Write-Output "  $_" }
+                    }
+                }
+            }
+        } else { Write-Output 'CLEANUP: no family packages beyond the installed set - store already clean' }
+    } catch {
+        Write-Output "CLEANUP-SKIPPED: driver store enumeration failed ($($_.Exception.Message)) - not fatal"
+    }
+
     # --- Post-install: does anything still demand a restart? ---
     Start-Sleep -Seconds 5
     $targetRe = 'VEN_8086&DEV_(7D51|7DD1|7D41|7D67|B640|64A0|6420|64B0|7D19|645D|5A19).*INT3480|' +
