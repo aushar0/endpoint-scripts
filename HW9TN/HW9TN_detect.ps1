@@ -40,27 +40,40 @@ $sp   = Get-CimInstance Win32_ComputerSystemProduct
 $bb   = Get-CimInstance Win32_BaseBoard
 $cs   = Get-CimInstance Win32_ComputerSystem
 $sigg = @($sp.Version, $sp.Name, $bb.Product, $cs.Model) -join ' '
-if ($sigg -notmatch 'PB14250') {
+if ($sigg -notmatch 'P[AB]14250') {
     if ($ForceScan) { Write-Output "GATE-BYPASSED (-ForceScan): machine is [$sigg]" }
     else { Write-Output "NOT-TARGET: no PB14250 signature in SMBIOS fields (got: $sigg)"; exit 0 }
 }
 
-# --- Target table - transcribed from mup.xml (HW9TN A13) ---
-# re = regex tested against device HARDWARE IDs; v = minimum acceptable driver version
+# --- Target table - transcribed from package manifests ---
+# TWO package families, discriminated by Dell subsystem ID in the hardware IDs:
+#   PA = 845M5 A12 (Dell Pro 13/14 Premium, PA13250/PA14250, subsys 0CE3/0CE4, LNL only)
+#   PB = HW9TN A13 (Dell Pro 14 Plus, PB14250, subsys 0CDC/0CF8 LNL + 0CE8/0CF7 ARL)
+# Shared components (usbbridge/UsbGpio/usbi2c/Vision-LNL) carry the same version
+# in both packages. Rows are subsys-scoped so a device can never match the wrong
+# family's target. re = regex against device HARDWARE IDs; v = minimum version.
 $targets = @(
-    @{ n = 'iacamera64-ARL';  re = 'VEN_8086&DEV_(7D51|7DD1|7D41|7D67|B640).*INT3480';            v = '64.26100.13.20730' }
-    @{ n = 'iacamera64-LNL';  re = 'VEN_8086&DEV_(64A0|6420|64B0).*INT3480';                       v = '70.26100.2.21770' }
-    @{ n = 'iaisp64-ARL';     re = 'VEN_8086&DEV_7D19';                                            v = '64.26100.13.20730' }
-    @{ n = 'iaisp64-LNL';     re = 'VEN_8086&DEV_(645D|5A19)';                                     v = '70.26100.2.21770' }
-    @{ n = 'hm1092-sensor';   re = 'VEN_HIMX&DEV_1092';                                            v = '70.26100.2.21770' }
-    @{ n = 'ov05c10-sensor';  re = 'VEN_OVTI&DEV_05C1';                                            v = '70.26100.2.21770' }
-    @{ n = 'ov08x40-sensor';  re = 'VEN_OVTI&DEV_08F4';                                            v = '70.26100.2.21770' }
-    @{ n = 'iactrllogic64';   re = 'VEN_INT&DEV_(3472|346F)';                                      v = '70.26100.2.21770' }
-    @{ n = 'usbbridge';       re = 'VID_8086&PID_0B63|VID_2AC1&PID_20C[19B]|VID_06CB&PID_0701';    v = '4.0.1.586' }
-    @{ n = 'UsbGpio';         re = 'INTC10B5';                                                     v = '1.0.2.739' }
-    @{ n = 'usbi2c';          re = 'INTC10B6';                                                     v = '1.0.2.418' }
-    @{ n = 'Vision-ARL';      re = 'INTC10E0';                                                     v = '41.3.10000.40' }
-    @{ n = 'Vision-LNL';      re = 'INTC10DE';                                                     v = '3.2.6.2087' }
+    # --- PA family (845M5 A12) ---
+    @{ n = 'iacamera64-PA';     re = 'VEN_8086&DEV_64A0&SUBSYS_0CE[34]1028.*INT3480';              v = '70.26100.2.21086' }
+    @{ n = 'iaisp64-PA';        re = 'VEN_8086&DEV_645D&SUBSYS_0CE[34]1028';                        v = '70.26100.2.21086' }
+    @{ n = 'hm1092-PA';         re = 'VEN_HIMX&DEV_1092&SUBSYS_0CE[34]1028';                        v = '70.26100.2.21086' }
+    @{ n = 'ov08x40-PA';        re = 'VEN_OVTI&DEV_08F4&SUBSYS_0CE[34]1028';                        v = '70.26100.2.21086' }
+    @{ n = 'iactrllogic-PA';    re = 'VEN_INT&DEV_3472&SUBSYS_0CE[34]1028';                         v = '70.26100.2.21086' }
+    # --- PB family (HW9TN A13) ---
+    @{ n = 'iacamera64-PB-ARL'; re = 'VEN_8086&DEV_(7D51|7DD1|7D41|7D67|B640)&SUBSYS_0C(E8|F7)1028.*INT3480'; v = '64.26100.13.20730' }
+    @{ n = 'iacamera64-PB-LNL'; re = 'VEN_8086&DEV_(64A0|6420|64B0)&SUBSYS_0C(DC|F8)1028.*INT3480';           v = '70.26100.2.21770' }
+    @{ n = 'iaisp64-PB-ARL';    re = 'VEN_8086&DEV_7D19&SUBSYS_0C(E8|F7)1028';                                 v = '64.26100.13.20730' }
+    @{ n = 'iaisp64-PB-LNL';    re = 'VEN_8086&DEV_(645D|5A19)&SUBSYS_0C(DC|F8)1028';                          v = '70.26100.2.21770' }
+    @{ n = 'hm1092-PB';         re = 'VEN_HIMX&DEV_1092&SUBSYS_0C(DC|F8|CE8|F7)1028';                         v = '70.26100.2.21770' }
+    @{ n = 'ov05c10-PB';        re = 'VEN_OVTI&DEV_05C1&SUBSYS_0C(DC|F8|CE8|F7)1028';                         v = '70.26100.2.21770' }
+    @{ n = 'ov08x40-PB';        re = 'VEN_OVTI&DEV_08F4&SUBSYS_0C(DC|F8|CE8|F7)1028';                         v = '70.26100.2.21770' }
+    @{ n = 'iactrllogic-PB';    re = 'VEN_INT&DEV_(3472|346F)&SUBSYS_0C(DC|F8|CE8|F7)1028';                   v = '70.26100.2.21770' }
+    # --- shared components (same version in both packages) ---
+    @{ n = 'usbbridge';         re = 'VID_8086&PID_0B63|VID_2AC1&PID_20C[19B]|VID_06CB&PID_0701';  v = '4.0.1.586' }
+    @{ n = 'UsbGpio';           re = 'INTC10B5';                                                     v = '1.0.2.739' }
+    @{ n = 'usbi2c';            re = 'INTC10B6';                                                     v = '1.0.2.418' }
+    @{ n = 'Vision-LNL';        re = 'INTC10DE';                                                     v = '3.2.6.2087' }
+    @{ n = 'Vision-ARL';        re = 'INTC10E0';                                                     v = '41.3.10000.40' }
 )
 
 function Get-ProblemCode($instanceId) {
@@ -93,7 +106,8 @@ foreach ($d in $Device) {
 
 # --- Layer 2: Synaptics bridge firmware state ---
 # Value names confirmed in driver binaries (Vision.sys: CurrentFWVersion; usbbridge.sys:
-# TargetVersion, UpdateVersion). Key layout confirmed on one live PB14250 = authoritative
+# TargetVersion, UpdateVersion). Known firmware targets: 8.5.98.42 (845M5 A12 - from the
+# extension INF's folder name). Key layout confirmed on one live device = authoritative
 # "firmware already updated?" check; until then this dump is the discovery pass.
 $fwRoots = 'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10E0',
            'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10DE',

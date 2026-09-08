@@ -48,11 +48,18 @@ and Synaptics bridge firmware registry state.
 
 ### Model coverage (verified from package INFs)
 
-**Dell Pro 14 Plus (PB14250) only** — subsystems 0CDC/0CF8 (Lunar Lake) and
-0CE8/0CF7 (Arrow Lake). The Dell Pro 14 Premium (PA14250, SUBSYS_0CE41028)
-is **not covered** by HW9TN; it needs its own sibling package. The detector's
-hardware-ID matching works across both, so the framework transfers by
-swapping the version table for the PA package.
+Two package families, both covered by the detector via subsystem-scoped target
+tables:
+
+- **HW9TN A13** — Dell Pro 14 Plus (PB14250): subsystems 0CDC/0CF8 (Lunar Lake)
+  and 0CE8/0CF7 (Arrow Lake)
+- **845M5 A12** — Dell Pro 13/14 Premium (PA13250/PA14250): subsystems
+  0CE3/0CE4, Lunar Lake
+
+Each family binds only its own package (subsystem matching is strict in the
+INFs); shared components (USB bridge / GPIO / I2C / Vision-LNL) carry the same
+versions in both. The installers here are built from the HW9TN package — build
+the 845M5 payload identically for Premium devices.
 
 Prerequisite per Dell: Intel Integrated Sensor Solution (ISH) driver must be
 installed before this stack.
