@@ -21,6 +21,52 @@ For the problem statement and a 30-second overview, see the
 | `deployment/app-detection-rule.ps1` | Detection rule script for the Intune Win32 app ("is the driver at target version?"). |
 | `deployment/psadt-toolkit/` | A complete, unmodified PSAppDeployToolkit 3.10.2 with the install wrapper already in place as `Toolkit\Deploy-Application.ps1`. Add the driver files (below), wrap, deploy. |
 
+## Case study: camera dead after a Windows feature update
+
+Example detector run on an affected machine (output abridged):
+
+```text
+TARGET: P[AB]14250 matched in SMBIOS field [SysProduct.Version]
+UPGRADE-CONTEXT: build 26200, last OS change 2026-08-14, Windows.old: False, recent-upgrade: True
+
+iacamera64-PB-LNL  status=Error  installed=70.26100.2.20000  target=70.26100.2.21770  OLD
+ov08x40-PB         status=Error  installed=NONE              target=70.26100.2.21770  OLD
+ov08x40-PB: Intel hardware on inbox driver (usbvideo.inf / Microsoft) - stack misbound (typical after OS upgrade)
+CAMERA: Integrated Webcam [Error] problem=10
+CAMERA: FrameServer error/warning events (7d): 12
+HW9TN|rca|first_err=2026-08-15T09:12|upgraded=2026-08-14T22:40|delta=+11h
+CORRELATION: camera broken + recent OS feature-update activity - consistent with 23H2->25H2 upgrade casualty
+
+NEEDS-UPDATE: True   CAMERA-BROKEN: True
+VERDICT: NEEDS+BROKEN - prime candidate: remediate with the camera package now (exit 3)
+```
+
+What the kit established, and what it did next:
+
+- **Named the missing component and why it matters.** The OmniVision sensor has
+  *no* driver bound (`NONE`), and the camera controller sits on the generic
+  Windows inbox driver instead of the Intel stack — the fingerprint of a
+  feature update rebinding the camera mid-upgrade. The ticket says "camera
+  doesn't work"; this says which of fourteen stack components is missing and
+  what put it there.
+- **Turned the ticket into a timeline.** The first camera failure in retained
+  logs landed 11 hours after the feature update committed — the `rca` line
+  that converts anecdotes into a measurable correlation across a fleet.
+- **Waited for the user instead of interrupting them.** Remediation polled
+  the camera consent store, found the user in a Teams call, and waited — no
+  prompt, no killed session, no forced reboot. It installed during the first
+  idle window.
+- **Cleaned up the cause, not just the symptom.** After binding the new
+  packages, the cleanup step removed the superseded driver packages the
+  upgrade had left behind — the exact multi-generation residue Dell's KB
+  identifies as the root cause. Exit `3010`: the stack finishes at the user's
+  next restart, with the previous driver keeping a working camera until then.
+
+Contrast with the alternative: a user files "we can't find your camera," and
+Event Viewer shows nothing at all once the device is gone (verified by
+controlled experiment — see Testing summary). Without PnP-level detection,
+the only diagnostic path is a live machine and a technician.
+
 ## How detection classifies a machine
 
 Two independent questions — **is the driver stack current?** and **is the

@@ -44,7 +44,11 @@ powershell -File .\camera-stack-dell-pro\detection\detect.ps1
 | 3 | needs update AND broken | prime candidate — remediate now |
 
 Deep-dive deployment (Intune Win32, Proactive Remediations, PSADT): see
-**[camera-stack-dell-pro/README.md](camera-stack-dell-pro/README.md)**.
+**[camera-stack-dell-pro/README.md](camera-stack-dell-pro/README.md)** —
+including a [case study](camera-stack-dell-pro/README.md#case-study-camera-dead-after-a-windows-feature-update)
+of a camera broken by a feature update: which component was missing, why, when
+it failed relative to the upgrade, and how remediation repaired it without
+interrupting the user's Teams call.
 
 ## 📦 Repository layout
 
