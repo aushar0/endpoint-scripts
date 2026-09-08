@@ -29,6 +29,8 @@ Event Viewer can't even see.*
 ## Conventions
 
 - One folder per kit; the kit's README is the front door.
+- **README commands are executed and verified before shipping** — the same
+  standard as code. A command that hasn't run doesn't get documented.
 - No vendor binaries committed — packages are fetched from the publisher at
   deploy time and verified (Authenticode signer + published hash).
 - Dual-surface logging wherever a kit acts on a machine: a readable narrative

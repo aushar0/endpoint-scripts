@@ -170,8 +170,10 @@ From the `deployment/psadt-toolkit/` folder:
 2. Create the Intune package with the
    [Microsoft Win32 Content Prep Tool](https://github.com/microsoft/microsoft-win32-content-prep-tool):
    ```bat
-   IntuneWinAppUtil.exe -c . -s .\Deploy-Application.exe -o .
+   IntuneWinAppUtil.exe -c . -s Deploy-Application.exe -o .
    ```
+   (Note: the tool rejects a `.\` prefix on the setup file — the command
+   above is executed and verified as written.)
    This produces `Deploy-Application.intunewin` in the current folder — the
    single-file format an Intune Win32 app requires
    ([preparation documentation](https://learn.microsoft.com/en-us/intune/app-management/deployment/create-win32-package)).
