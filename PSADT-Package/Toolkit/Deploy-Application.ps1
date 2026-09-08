@@ -18,7 +18,11 @@ manifest below. PSADT syntax verified against psadt_docs 3.10.2 reference.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Silent', 'Interactive', 'NonInteractive')]
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('Install', 'Uninstall', 'Repair')]
+    [string]$DeploymentType = 'Install',   # exe passes this - absent param = instant abort (found in VM boot test)
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('Interactive', 'Silent', 'NonInteractive')]
     [string]$DeployMode = 'Silent',
     [int]$MaxWaitMinutes = 45,
     [int]$PollMinutes = 10,
@@ -96,7 +100,11 @@ $familyInfs = 'iacamera64.inf','hm1092.inf','ov05c10.inf','ov08x40.inf','iactrll
               'iaisp64.inf','usbbridge.inf','usbgpio.inf','usbi2c.inf','vision.inf','visionextension.inf'
 $stackRe = 'VEN_8086&DEV_(7D51|7DD1|7D41|7D67|B640|64A0|6420|64B0|7D19|645D|5A19).*INT3480|VEN_HIMX&DEV_1092|VEN_OVTI&DEV_(05C1|08F4)|VEN_INT&DEV_(3472|346F)|VID_8086&PID_0B63|VID_2AC1&PID_20C[19B]|VID_06CB&PID_0701|INTC10B5|INTC10B6|INTC10E0|INTC10DE'
 
-[string]$deploymentType = 'Install'
+[string]$deploymentType = $DeploymentType
+if ($deploymentType -ne 'Install') {
+    Write-Log -Message "DeploymentType [$deploymentType] not implemented for this package - exiting" -Source 'HW9TN'
+    Exit-Script -ExitCode 0
+}
 Try {
     Set-Variable -Name 'installPhase' -Value 'Pre-Install'
 
