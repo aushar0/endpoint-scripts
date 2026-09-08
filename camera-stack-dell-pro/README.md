@@ -42,7 +42,7 @@ powershell -File .\detection\detect.ps1
 | `detection/intune-remediation.ps1` | Remediation script for the same package: downloads, verifies, extracts, waits for an idle camera, installs, cleans up. Fits the 60-minute remediation budget. |
 | `deployment/install.ps1` | Standalone installer for Intune Win32 apps or manual (admin console) runs. Same behavior, longer wait window. |
 | `deployment/app-detection-rule.ps1` | Detection rule script for the Intune Win32 app ("is the driver at target version?"). |
-| `deployment/psadt-toolkit/` | A complete, unmodified PSAppDeployToolkit 3.10.2 with the install wrapper already in place as `Toolkit\Deploy-Application.ps1`. Add the driver files (below), wrap, deploy. |
+| `deployment/psadt-toolkit/` | A complete, unmodified PSAppDeployToolkit 3.10.2 with the install wrapper already in place as `Deploy-Application.ps1`. Add the driver files (below), wrap, deploy. |
 
 ## ✨ What this kit does
 
@@ -159,16 +159,21 @@ Installer exit codes: `0` success · `3010` success, restart pending ·
 
 ### Intune Win32 app
 
+The `psadt-toolkit` folder follows the standard PSADT layout: `AppDeployToolkit\`
+is the engine, `Files\` is the payload, and `Deploy-Application.exe` is the
+entry point. (The official release zip wraps these in an extra `Toolkit\`
+folder; this repository flattens that away.)
+
 From the `deployment/psadt-toolkit/` folder:
 
-1. Copy the extracted Dell driver tree into `.\Toolkit\Files\Drivers\`.
+1. Copy the extracted Dell driver tree into `Files\Drivers\`.
 2. Create the Intune package with the
    [Microsoft Win32 Content Prep Tool](https://github.com/microsoft/microsoft-win32-content-prep-tool):
    ```bat
-   IntuneWinAppUtil.exe -c .\Toolkit -s .\Toolkit\Deploy-Application.exe -o .
+   IntuneWinAppUtil.exe -c . -s .\Deploy-Application.exe -o .
    ```
-   This produces `Toolkit.intunewin` in the current folder — the single-file
-   format an Intune Win32 app requires
+   This produces `Deploy-Application.intunewin` in the current folder — the
+   single-file format an Intune Win32 app requires
    ([preparation documentation](https://learn.microsoft.com/en-us/intune/app-management/deployment/create-win32-package)).
 3. App settings:
    - Install command: `Deploy-Application.exe -DeploymentType Install -DeployMode Silent`
