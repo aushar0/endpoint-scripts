@@ -1,14 +1,37 @@
 # Camera Stack Kit — Dell Pro (Intel MIPI)
 
-This kit detects and repairs the integrated camera stack on Dell Pro
-laptops: the Intel MIPI camera drivers, the USB bridge, and the presence-sensor
-(Vision) firmware — the components that Windows feature updates commonly break.
-Detection is read-only and safe to run at any time, including during video
-calls. Installation waits for the camera to be idle, never prompts the user,
-never closes applications, and never forces a restart.
+![Platform](https://img.shields.io/badge/Platform-Windows%2011-lightgrey)
+![Intune](https://img.shields.io/badge/Intune-Win32%20%7C%20Remediations-0078D4)
+![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
+![Package](https://img.shields.io/badge/Package-HW9TN%20A13-informational)
 
-For the problem statement and a 30-second overview, see the
-[repository README](../README.md).
+*"Camera can't start." "We can't find your camera." "Teams doesn't see my camera."*
+
+On Dell Pro laptops, the Intel MIPI camera stack breaks in ways a version check
+can't see: Windows feature updates rebind devices to inbox drivers, leave
+mixed-generation driver stacks behind, or strand firmware half-updated — and
+once the camera device is gone, **Event Viewer records nothing at all**. The
+only reliable evidence lives in PnP state, and by the time a ticket arrives,
+nobody knows which layer failed.
+
+This kit detects and repairs that stack. Detection is read-only and safe to
+run at any time, including during video calls. Installation waits for the
+camera to be idle, never prompts the user, never closes applications, and
+never forces a restart.
+
+## Quick start
+
+```powershell
+# Read-only health check — safe during calls, exits in seconds
+powershell -File .\detection\detect.ps1
+```
+
+| Exit | Meaning | Action |
+|---|---|---|
+| 0 | healthy + current | leave alone |
+| 1 | needs update | routine — next maintenance window |
+| 2 | camera problem, drivers current | **not** this driver — dependency route (KB 000248760) |
+| 3 | needs update AND broken | prime candidate — remediate now |
 
 ## What's in the box
 
