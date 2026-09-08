@@ -41,8 +41,8 @@ Try { Set-ExecutionPolicy -ExecutionPolicy 'Bypass' -Scope 'Process' -Force -Err
 [string]$appScriptDate = '2026-09-08'
 
 #region --- RCA logging (dual-surface) -----------------------------------------
-# One call, two audiences:
-#   PSADT log  = readable narrative (-Message string) - what support reads
+# One call, two surfaces:
+#   PSADT log  = readable narrative (the -Message string)
 #   machine.log + last_run.json = strict key=value lines - what grep/AI/fleet reads
 #   stdout     = machine line - what Intune/PR engines capture
 $rca = [ordered]@{ started = (Get-Date -Format s); phases = @() }

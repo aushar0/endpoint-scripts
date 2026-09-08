@@ -190,12 +190,14 @@ uses a local copy of the package instead of downloading.
 
 ## Logs
 
-| Location | Audience | Format |
-|---|---|---|
-| `C:\Windows\Logs\Software\...CameraStack...log` (PSADT log) | operators | plain-English narrative, problem codes translated to text |
-| `C:\ProgramData\DellCamera\<package>\machine.log` | tools / grep / fleet analysis | strict `key=value` lines, one per event |
-| `C:\ProgramData\DellCamera\<package>\last_run.json` | tooling / support | full pre/post snapshot of the run |
-| stdout | Intune / Remediations reporting | machine lines |
+Everything a run observes and does is recorded in four places:
+
+| Location | What it is |
+|---|---|
+| `C:\Windows\Logs\Software\...CameraStack...log` | The deployment log (PSADT) — a plain-English narrative, with problem codes translated to text |
+| `C:\ProgramData\DellCamera\<package>\machine.log` | Machine-readable event lines (`key=value`), built for grep and fleet-wide analysis |
+| `C:\ProgramData\DellCamera\<package>\last_run.json` | A full pre/post snapshot of the last run |
+| stdout | The same machine lines, captured by Intune / Remediations reporting |
 
 When the post-install check finds problems, a `setupapi_camera_slice.log`
 (Windows driver-install history, filtered to the camera INFs) is captured
