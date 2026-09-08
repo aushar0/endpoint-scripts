@@ -127,27 +127,36 @@ foreach ($d in $Device) {
 }
 
 # --- Layer 2: Synaptics bridge firmware state ---
-# Value names confirmed in driver binaries (Vision.sys: CurrentFWVersion; usbbridge.sys:
-# TargetVersion, UpdateVersion). Known firmware targets: 8.5.98.42 (845M5 A12 - from the
-# extension INF's folder name). Key layout confirmed on one live device = authoritative
-# "firmware already updated?" check; until then this dump is the discovery pass.
+# Registry layout CONFIRMED on live hardware (2026-09-08): CurrentFWVersion carries the
+# Synaptics vision-EXTENSION INF version (firmware-payload proxy: >= 133.152.66.0
+# <=> firmware family >= 8.5.98.42, the level shipped in both 845M5 A12 and HW9TN A13).
+# TargetVersion/UpdateVersion stay 0.0.0.0 by design (unpopulated usbbridge.inf
+# placeholder) - informational only, never a signal.
+$fwExtTarget = '133.152.66.0'
 $fwRoots = 'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10E0',
            'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10DE',
            'HKLM:\SYSTEM\CurrentControlSet\Enum\USB\VID_06CB&PID_0701'
-$fwNames = 'CurrentFWVersion', 'TargetVersion', 'UpdateVersion', 'FwImagePathVer2', 'FWVendor'
+$fwCurrent = $null
 $fwSeen  = 0
 foreach ($root in $fwRoots) {
-    Get-ChildItem $root -Recurse | ForEach-Object {
+    Get-ChildItem $root -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
         $p = Get-ItemProperty $_.PSPath
-        foreach ($n in $fwNames) {
+        foreach ($n in 'CurrentFWVersion', 'TargetVersion', 'UpdateVersion') {
             if ($p.$n) {
                 Write-Output "FW: $($_.Name.Replace('HKEY_LOCAL_MACHINE\SYSTEM\',''))\$n = $($p.$n)"
                 $fwSeen++
+                if ($n -eq 'CurrentFWVersion') { $script:fwCurrent = $p.$n }
             }
         }
     }
 }
-if ($fwSeen -eq 0) { Write-Output 'FW: no version values found under Vision/usbbridge Enum keys (confirm key layout on a live device)' }
+if ($fwCurrent) {
+    $fwOk = [version]$fwCurrent -ge [version]$fwExtTarget
+    Write-Output ("FW: firmware-payload proxy CurrentFWVersion={0} target>={1} -> {2}" -f $fwCurrent, $fwExtTarget, $(if ($fwOk) { 'CURRENT' } else { 'OLD' }))
+    if (-not $fwOk) { $needs += "vision-firmware-extension: $fwCurrent -> $fwExtTarget" }
+} elseif ($fwSeen -eq 0) {
+    Write-Output 'FW: no version values found (Vision/usbbridge not installed on this machine)'
+}
 
 # --- Layer 3: camera health (the ticket states) ---
 $camDevices = Get-PnpDevice -Class Camera,Image -PresentOnly

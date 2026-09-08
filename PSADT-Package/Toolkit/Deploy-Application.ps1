@@ -152,16 +152,22 @@ Try {
         Write-Rca 'dev' ("$short|drv=$(if ($cur) { $cur } else { 'NONE' })|inf=$(if ($inf) { $inf } else { '-' })|prov=$(if ($prov) { $prov } else { '-' })|prob=$prob")
     }
 
-    $fwLine = @()
+    $fwLine = @(); $fwCurrent = $null
     foreach ($root in 'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10E0', 'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10DE', 'HKLM:\SYSTEM\CurrentControlSet\Enum\USB\VID_06CB&PID_0701') {
         Get-ChildItem $root -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
             $p = Get-ItemProperty $_.PSPath
             foreach ($n in 'CurrentFWVersion', 'TargetVersion', 'UpdateVersion') {
                 if ($p.$n) { $fwLine += "$n=$($p.$n)" }
+                if ($n -eq 'CurrentFWVersion' -and $p.$n) { $script:fwCurrent = $p.$n }
             }
         }
     }
-    Write-Rca 'fw' ($(if ($fwLine) { $fwLine -join '|' } else { 'values=none-found' })) -Record
+    # CurrentFWVersion = Synaptics vision-extension INF version (firmware-payload proxy,
+    # confirmed live 2026-09-08): >= 133.152.66.0 <=> fw family >= 8.5.98.42. Target/Update
+    # stay 0.0.0.0 by design (unpopulated placeholder) - not signals.
+    $fwTarget = '133.152.66.0'
+    $fwState = if ($fwCurrent) { if ([version]$fwCurrent -ge [version]$fwTarget) { 'CURRENT' } else { 'OLD' } } else { 'absent' }
+    Write-Rca 'fw' ("$(if ($fwLine) { $fwLine -join '|' } else { 'values=none-found' })|proxy_state=$fwState") -Record
 
     $firstErr = Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-MF-FrameServer/Camera_FrameServer'; Level = 1, 2 } -Oldest -ErrorAction SilentlyContinue | Select-Object -First 1
     $delta = if ($firstErr) { [int](($firstErr.TimeCreated - $os.InstallDate).TotalHours) } else { $null }

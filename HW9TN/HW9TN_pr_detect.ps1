@@ -91,6 +91,27 @@ Write-Output ("HW9TN|rca|first_err={0}|upgraded={1:yyyy-MM-dd HH:mm}|delta={2}" 
     $(if ($firstErr) { $firstErr.TimeCreated.ToString('yyyy-MM-ddTHH:mm') } else { 'none-in-retention' }),
     $os.InstallDate, $(if ($null -ne $delta) { "{0}h" -f $delta } else { 'n/a' }))
 
+# --- firmware-payload proxy (registry layout confirmed on live hardware) ---
+# CurrentFWVersion carries the Synaptics vision-extension INF version; >= 133.152.66.0
+# <=> firmware family >= 8.5.98.42 (shipped in both current packages). Target/Update
+# stay 0.0.0.0 by design - never a signal.
+$fwExtTarget = '133.152.66.0'
+$fwCurrent = $null
+foreach ($root in 'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10E0',
+                  'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10DE',
+                  'HKLM:\SYSTEM\CurrentControlSet\Enum\USB\VID_06CB&PID_0701') {
+    Get-ChildItem $root -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        $p = Get-ItemProperty $_.PSPath
+        if ($p.CurrentFWVersion) { $script:fwCurrent = $p.CurrentFWVersion }
+    }
+}
+if ($fwCurrent -and ([version]$fwCurrent -lt [version]$fwExtTarget)) {
+    $needs += "vision-firmware-extension: $fwCurrent -> $fwExtTarget"
+    Write-Output "HW9TN|fw|proxy=$fwCurrent|target>=$fwExtTarget|state=OLD"
+} elseif ($fwCurrent) {
+    Write-Output "HW9TN|fw|proxy=$fwCurrent|target>=$fwExtTarget|state=CURRENT"
+}
+
 # --- exit map ---
 if ($needs.Count -or $misbound.Count) {
     Write-Output "NEEDS-REMEDIATION: $($needs.Count + $misbound.Count) finding(s)"
