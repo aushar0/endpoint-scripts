@@ -46,6 +46,21 @@ and Synaptics bridge firmware registry state.
 - Exit codes: `0` success · `3010` success + pending restart · `1618` camera
   busy → Intune fast-retry (not a failure).
 
+### PSADT package (`PSADT-Package/`)
+
+Complete, runnable kit: official **PSAppDeployToolkit 3.10.2** (unmodified
+vendor tree, LGPL — COPYING.Lesser retained) with our wrapper installed as
+`Toolkit\Deploy-Application.ps1` and a payload note in `Toolkit\Files\`.
+Drop the extracted driver tree into `Files\` and it is deploy-ready (wrap the
+Toolkit folder with IntuneWinAppUtil, or use as an SCCM package).
+
+Version matrix:
+
+| PSADT version | Status |
+|---|---|
+| 3.10.1 / 3.10.2 | what this package ships — wrapper syntax verified against the 3.10.2 reference docs |
+| 4.x | wrapper logic runs via v4 compatibility wrappers (Execute-Process → Start-ADTProcess, Exit-Script → Close-ADTSession, Write-Log → Write-ADTLogEntry — all mapped "Yes" in the official v4 function-mapping); slot the logic into a v4 Template_v3 for the newer engine |
+
 ### Model coverage (verified from package INFs)
 
 Two package families, both covered by the detector via subsystem-scoped target
