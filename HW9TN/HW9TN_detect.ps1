@@ -39,11 +39,14 @@ $ErrorActionPreference = 'SilentlyContinue'
 $sp   = Get-CimInstance Win32_ComputerSystemProduct
 $bb   = Get-CimInstance Win32_BaseBoard
 $cs   = Get-CimInstance Win32_ComputerSystem
-$sigg = @($sp.Version, $sp.Name, $bb.Product, $cs.Model) -join ' '
-if ($sigg -notmatch 'P[AB]14250') {
+$sigFields = @{ 'SysProduct.Version' = $sp.Version; 'SysProduct.Name' = $sp.Name; 'BaseBoard.Product' = $bb.Product; 'ComputerSystem.Model' = $cs.Model }
+$sigg = ($sigFields.Values | Where-Object { $_ }) -join ' '
+$matchField = ($sigFields.GetEnumerator() | Where-Object { "$($_.Value)" -match 'P[AB]14250' } | Select-Object -First 1).Key
+if (-not $matchField) {
     if ($ForceScan) { Write-Output "GATE-BYPASSED (-ForceScan): machine is [$sigg]" }
-    else { Write-Output "NOT-TARGET: no PB14250 signature in SMBIOS fields (got: $sigg)"; exit 0 }
+    else { Write-Output "NOT-TARGET: no PA/PB14250 signature in SMBIOS fields (got: $sigg)"; exit 0 }
 }
+else { Write-Output "TARGET: P[AB]14250 matched in SMBIOS field [$matchField]" }
 
 # --- Layer 0.5: OS upgrade context (23H2->25H2 casualty correlation) ---
 # InstallDate resets at each feature update = "last OS change". Windows.old
