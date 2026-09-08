@@ -195,4 +195,4 @@ automatically — the forensic record of what the OS did to the camera stack.
 
 - [Dell KB 000248760 — MIPI camera may not work under Windows](https://www.dell.com/support/kbdoc/en-us/000248760/laptop-mipi-camera-may-not-work-under-windows)
 - [PSAppDeployToolkit](https://psappdeploytoolkit.com) (bundled under LGPL-3.0)
-- Dell driver pages: [HW9TN](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=hw9tn) · [845M5](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=845m5)
+- Dell driver page: [HW9TN](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=hw9tn)

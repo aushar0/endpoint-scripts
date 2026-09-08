@@ -99,5 +99,5 @@ Details and evidence in the kit README.
 - Kit scripts: license not yet declared.
 - `psadt-toolkit/` bundles [PSAppDeployToolkit](https://psappdeploytoolkit.com)
   3.10.2 unmodified (LGPL-3.0; see `COPYING.Lesser` inside the toolkit).
-- Driver packages referenced: Dell HW9TN / 845M5 — property of Dell/Intel,
+- Driver packages referenced: Dell HW9TN — property of Dell/Intel,
   distributed by Dell only.
