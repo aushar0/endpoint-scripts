@@ -68,6 +68,23 @@ if ($camCount -eq 0) { $problem += 'no camera devices present' }
 $fsErr = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-MF-FrameServer/Camera_FrameServer'; Level = 1,2,3; StartTime = (Get-Date).AddDays(-7) }).Count
 if ($fsErr -ge 5) { $problem += "$fsErr FrameServer errors in 7d" }
 
+# --- RCA context (read-only; feeds the detection-output column fleet-wide) ---
+$os = Get-CimInstance Win32_OperatingSystem
+$firstErr = Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-MF-FrameServer/Camera_FrameServer'; Level = 1,2 } -Oldest -ErrorAction SilentlyContinue | Select-Object -First 1
+$delta = if ($firstErr) { [int](($firstErr.TimeCreated - $os.InstallDate).TotalHours) } else { $null }
+Write-Output ("HW9TN|ctx|bios={0}|build={1}|os_changed={2:yyyy-MM-dd}|winold={3}" -f `
+    (Get-CimInstance Win32_BIOS).SMBIOSBIOSVersion, $os.BuildNumber, $os.InstallDate, (Test-Path 'C:\Windows.old'))
+function Get-DepVer($Pattern) {
+    $d = Get-PnpDevice -PresentOnly | Where-Object { $_.FriendlyName -match $Pattern } | Select-Object -First 1
+    if ($d) { $v = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion').Data; if ($v) { return $v } }
+    return 'missing'
+}
+Write-Output ("HW9TN|dep|ish={0}|serialio={1}|me={2}" -f `
+    (Get-DepVer 'Integrated Sensor Solution'), (Get-DepVer 'Serial IO'), (Get-DepVer 'Management Engine'))
+Write-Output ("HW9TN|rca|first_err={0}|upgraded={1:yyyy-MM-dd HH:mm}|delta={2}" -f `
+    $(if ($firstErr) { $firstErr.TimeCreated.ToString('yyyy-MM-ddTHH:mm') } else { 'none-in-retention' }),
+    $os.InstallDate, $(if ($null -ne $delta) { "{0}h" -f $delta } else { 'n/a' }))
+
 # --- exit map ---
 if ($needs.Count -or $misbound.Count) {
     Write-Output "NEEDS-REMEDIATION: $($needs.Count + $misbound.Count) finding(s)"
