@@ -1,83 +1,97 @@
 # endpoint-scripts
 
-Endpoint engineering toolkit — detection, deployment, and health monitoring
-for driver remediation. Current kit: **Intel camera stack (Dell package
-HW9TN A13, v80.26100.0.29), worked example: Dell Pro 14 Plus (PB14250).**
+> Windows endpoint engineering kits — detect, classify, and remediate driver faults
+> **without disturbing a single user.**
 
-## HW9TN camera stack kit (`HW9TN/`)
+![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
+![Platform](https://img.shields.io/badge/Platform-Windows%2011-lightgrey)
+![Intune](https://img.shields.io/badge/Intune-Win32%20%7C%20Remediations-0078D4)
+![License](https://img.shields.io/badge/toolkit-LGPL--3.0-green)
 
-| File | Job |
+## 🎯 The problem
+
+*"Camera can't start." "We can't find your camera." "Teams doesn't see my camera."*
+
+On Dell Pro laptops, the Intel MIPI camera stack breaks in ways a version check
+can't see: Windows feature updates rebind devices to inbox drivers, leave
+mixed-generation driver stacks behind, or strand firmware half-updated — and
+once the camera device is gone, **Event Viewer records nothing at all**. The
+only reliable evidence lives in PnP state, and by the time a ticket arrives,
+nobody knows which layer failed.
+
+## ✨ What this kit does
+
+| Capability | How |
 |---|---|
-| `HW9TN_detect.ps1` | Read-only health monitor + needs-update detection. Run on any machine — self-gates by model. Safe during calls (nothing is closed or stopped). |
-| `install.ps1` | Bare Intune Win32 installer: pnputil-based, patient-wait, no forced reboot. |
-| `Deploy-Application.ps1` | PSADT v3.8/3.9 wrapper — same payload, same doctrine (syntax verified against PSADT 3.10.2 reference docs). |
-| `detection_rule.ps1` | Intune Win32 app detection rule ("driver at target version?"). |
-| `readme.md` | Full deployment notes: package build, Intune app settings, return codes, design doctrine. |
+| **Detect** | Reads live PnP state: device problem codes, driver versions vs. target, firmware payload level, missing cameras, Frame Server errors — never event logs for the missing-device class (proven invisible). |
+| **Classify** | A four-way verdict that separates *driver-outdated* from *camera-broken* from *disabled-by-choice* — because they have different fixes. |
+| **Remediate** | Installs only when the camera is idle (consent-store streaming check), never prompts, never kills processes, never forces reboots. Restarts ride the user's own reboot; the old driver keeps the camera working until then. |
+| **Clean up** | After binding, removes superseded driver packages from the store — the residue Windows feature updates leave behind and Dell's KB 000248760 blames for these tickets. |
+| **Explain** | Dual-surface logging: plain-English narrative for humans, strict `key=value` lines for grep/fleet analysis, plus a per-machine JSON snapshot with pre/post diff. |
 
-### Quick start — detection
+## 🚀 Quick start
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File HW9TN_detect.ps1
-# on a lab machine / non-target model: add -ForceScan to bypass the model gate
+# Read-only health check — safe during calls, exits in seconds
+powershell -File .\camera-stack-dell-pro\detection\detect.ps1
 ```
 
 | Exit | Meaning | Action |
 |---|---|---|
 | 0 | healthy + current | leave alone |
-| 1 | needs update | routine — overnight/next-cycle install |
-| 2 | camera problem, driver current | NOT this driver — check Intel ISH prerequisite, BIOS, hardware |
+| 1 | needs update | routine — next maintenance window |
+| 2 | camera problem, drivers current | **not** this driver — dependency route (KB 000248760) |
 | 3 | needs update AND broken | prime candidate — remediate now |
 
-The detector reads real device state: camera-class devices and PnP problem
-codes (10 = cannot start, 14 = needs restart, 28 = no driver), zero-camera
-signature, Frame Server error events (7d), stack driver versions vs target,
-and Synaptics bridge firmware registry state.
+Deep-dive deployment (Intune Win32, Proactive Remediations, PSADT): see
+**[camera-stack-dell-pro/README.md](camera-stack-dell-pro/README.md)**.
 
-### Installer behavior (both installers)
+## 📦 Repository layout
 
-- **Patient wait**: polls the camera-streaming state (CapabilityAccessManager
-  consent store) every 10 min up to 45 min; installs the moment the camera is
-  idle. Locked-on-a-call correctly reads as busy; tray-idle Teams does not.
-- **Never prompts, never closes apps, never kills processes.**
-- Installs via `pnputil /add-driver /subdirs /install` + live re-enumeration.
-- **Restarts are user-paced, always** — exit 3010 (pending restart) rides the
-  user's natural reboot; the old driver keeps the camera working meanwhile.
-  No forced reboot with unsaved work, ever.
-- Exit codes: `0` success · `3010` success + pending restart · `1618` camera
-  busy → Intune fast-retry (not a failure).
+```
+camera-stack-dell-pro/
+├── detection/
+│   ├── detect.ps1              Full diagnostic — the 2×2 verdict (exit 0–3)
+│   ├── intune-detection.ps1    Intune Remediations detection script (exit 0/1)
+│   └── intune-remediation.ps1  Intune Remediations remediation script
+├── deployment/
+│   ├── install.ps1             Bare installer (Intune Win32 / manual)
+│   ├── app-detection-rule.ps1  Intune Win32 app detection rule
+│   └── psadt-toolkit/          Complete PSAppDeployToolkit 3.10.2 with the
+│                                wrapper installed (drop drivers in Files\,
+│                                deploy via IntuneWinAppUtil or SCCM)
+└── README.md                   Kit documentation: architecture, config, matrices
+```
 
-### PSADT package (`PSADT-Package/`)
+## 🖥️ Supported hardware
 
-Complete, runnable kit: official **PSAppDeployToolkit 3.10.2** (unmodified
-vendor tree, LGPL — COPYING.Lesser retained) with our wrapper installed as
-`Toolkit\Deploy-Application.ps1` and a payload note in `Toolkit\Files\`.
-Drop the extracted driver tree into `Files\` and it is deploy-ready (wrap the
-Toolkit folder with IntuneWinAppUtil, or use as an SCCM package).
+| Package | Models | Silicon |
+|---|---|---|
+| HW9TN A13 | Dell Pro 14 **Plus** (PB14250) | Arrow Lake + Lunar Lake |
+| 845M5 A12 | Dell Pro 13/14 **Premium** (PA13250/PA14250) | Lunar Lake |
 
-Version matrix:
+Each family binds only its own package (strict subsystem matching, verified
+from the INFs). Driver packages themselves are not redistributed here — fetch
+from Dell (links in the kit README).
 
-| PSADT version | Status |
-|---|---|
-| 3.10.1 / 3.10.2 | what this package ships — wrapper syntax verified against the 3.10.2 reference docs |
-| 4.x | wrapper logic runs via v4 compatibility wrappers (Execute-Process → Start-ADTProcess, Exit-Script → Close-ADTSession, Write-Log → Write-ADTLogEntry — all mapped "Yes" in the official v4 function-mapping); slot the logic into a v4 Template_v3 for the newer engine |
+## ✅ Verification bar
 
-### Model coverage (verified from package INFs)
+Every claim above is anchored: healthy-camera and missing-camera branches run
+on live hardware; the PSADT package boot-tested end-to-end in a VM via the
+exact public-artifact path (three real packaging bugs caught that way); the
+missing-camera-is-log-invisible finding established by controlled experiment.
+Details and evidence in the kit README.
 
-Two package families, both covered by the detector via subsystem-scoped target
-tables:
+## 🧰 Requirements
 
-- **HW9TN A13** — Dell Pro 14 Plus (PB14250): subsystems 0CDC/0CF8 (Lunar Lake)
-  and 0CE8/0CF7 (Arrow Lake)
-- **845M5 A12** — Dell Pro 13/14 Premium (PA13250/PA14250): subsystems
-  0CE3/0CE4, Lunar Lake
+- Windows 11 (build 26100+), PowerShell 5.1+
+- Detection: any context (read-only). Installation: admin/SYSTEM.
+- Driver payload from Dell's site (never committed here).
 
-Each family binds only its own package (subsystem matching is strict in the
-INFs); shared components (USB bridge / GPIO / I2C / Vision-LNL) carry the same
-versions in both. The installers here are built from the HW9TN package — build
-the 845M5 payload identically for Premium devices.
+## 📄 License & credits
 
-Prerequisite per Dell: Intel Integrated Sensor Solution (ISH) driver must be
-installed before this stack.
-
-Source package: "Intel 2D Imaging/USB IO/Vision Driver for Camera", A13
-(80.26100.0.29), Dell driver ID HW9TN.
+- Kit scripts: license TBD by owner.
+- `psadt-toolkit/` bundles [PSAppDeployToolkit](https://psappdeploytoolkit.com)
+  3.10.2 unmodified (LGPL-3.0; see `COPYING.Lesser` inside the toolkit).
+- Driver packages referenced: Dell HW9TN / 845M5 — property of Dell/Intel,
+  distributed by Dell only.
