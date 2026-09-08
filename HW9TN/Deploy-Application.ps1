@@ -78,8 +78,8 @@ function Get-DepVer($Pattern) {
 }
 #endregion ----------------------------------------------------------------------
 
-# Import the AppDeployToolkit (uncomment in the real template)
-#. "$PSScriptRoot\AppDeployToolkit\AppDeployToolkitMain.ps1"
+# Import the AppDeployToolkit (ACTIVE - this file is the complete template)
+. "$PSScriptRoot\AppDeployToolkit\AppDeployToolkitMain.ps1"
 
 # --- family package manifest ---
 $manifest = @{
