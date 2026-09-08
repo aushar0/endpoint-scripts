@@ -44,7 +44,7 @@ $targets = @(
     @{ n = 'Vision-ARL';        re = 'INTC10E0';                                                     v = '41.3.10000.40' }
 )
 
-$needs = @(); $misbound = @(); $problem = @(); $found = 0
+$needs = @(); $misbound = @(); $problem = @(); $disabled = @(); $found = 0
 foreach ($d in (Get-PnpDevice -PresentOnly)) {
     $hw = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds').Data
     if (-not $hw) { continue }
@@ -55,7 +55,8 @@ foreach ($d in (Get-PnpDevice -PresentOnly)) {
             $cur = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion').Data
             if (-not $cur -or [version]$cur -lt [version]$t.v) { $needs += "$($t.n): $(if ($cur) { $cur } else { 'NONE' }) -> $($t.v)" }
             $pc = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
-            if ($pc -and $pc -ne 0) { $problem += "$($t.n) code $pc" }
+            if ($pc -eq 22) { $disabled += "$($t.n) disabled (CM_PROB_DISABLED - user/policy choice; a driver update will not enable it)" }
+            elseif ($pc -and $pc -ne 0) { $problem += "$($t.n) code $pc" }
             $prov = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverProvider').Data
             $infP = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverInfPath').Data
             if ($prov -match 'Microsoft' -or $infP -match 'usbvideo\.inf') { $misbound += "$($t.n) on inbox driver" }
@@ -64,7 +65,12 @@ foreach ($d in (Get-PnpDevice -PresentOnly)) {
     }
 }
 $camCount = @(Get-PnpDevice -Class Camera,Image -PresentOnly).Count
-if ($camCount -eq 0) { $problem += 'no camera devices present' }
+if ($camCount -eq 0 -and $disabled.Count -eq 0) { $problem += 'no camera devices present' }
+foreach ($c in (Get-PnpDevice -Class Camera,Image -PresentOnly)) {
+    $cpc = (Get-PnpDeviceProperty -InstanceId $c.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
+    if ($cpc -eq 22) { $disabled += "$($c.FriendlyName) disabled" }
+    elseif ($cpc -and $cpc -ne 0) { $problem += "$($c.FriendlyName) code $cpc" }
+}
 $fsErr = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-MF-FrameServer/Camera_FrameServer'; Level = 1,2,3; StartTime = (Get-Date).AddDays(-7) }).Count
 if ($fsErr -ge 5) { $problem += "$fsErr FrameServer errors in 7d" }
 
@@ -90,12 +96,18 @@ if ($needs.Count -or $misbound.Count) {
     Write-Output "NEEDS-REMEDIATION: $($needs.Count + $misbound.Count) finding(s)"
     $needs + $misbound | ForEach-Object { Write-Output "  $_" }
     if ($problem) { Write-Output "also-broken-now: $($problem -join '; ')" }
+    if ($disabled) { Write-Output "also-disabled (NOT a fault - user/policy choice): $($disabled -join '; ')" }
     exit 1
 }
 if ($problem.Count) {
     Write-Output 'BROKEN-CURRENT: drivers at target but camera problems present -'
     Write-Output 'dependency route (Dell KB 000248760): BIOS camera enable, chipset, graphics, ISH, Serial I/O, ME'
     $problem | ForEach-Object { Write-Output "  $_" }
+    if ($disabled) { Write-Output "also-disabled (NOT a fault): $($disabled -join '; ')" }
+    exit 0
+}
+if ($disabled.Count) {
+    Write-Output "compliant ($found stack components at target); camera devices disabled by choice: $($disabled -join '; ')"
     exit 0
 }
 Write-Output "compliant ($found stack components at target)"

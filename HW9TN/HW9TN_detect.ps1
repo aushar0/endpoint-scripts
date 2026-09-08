@@ -96,6 +96,7 @@ function Get-ProblemCode($instanceId) {
 # --- Layer 1: driver versions vs targets (present devices only) ---
 $needs   = @()
 $stackProblem = @()
+$stackDisabled = @()
 $Device  = Get-PnpDevice -PresentOnly
 foreach ($d in $Device) {
     $hw = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds').Data
@@ -109,9 +110,10 @@ foreach ($d in $Device) {
             Write-Output ("{0,-18} status={1,-10} installed={2,-20} target={3,-20} {4}" -f `
                 $t.n, $d.Status, $curTxt, $t.v, $(if ($ok) { 'OK' } else { 'OLD' }))
             if (-not $ok) { $needs += "$($t.n): $curTxt -> $($t.v)" }
-            # Layer 3a: problem codes on any stack devnode
+            # Layer 3a: problem codes on any stack devnode (22 = disabled = deliberate, not a fault)
             $pc = Get-ProblemCode $d.InstanceId
-            if ($pc -and $pc -ne 0) { $stackProblem += "$($t.n) problem code $pc ($($d.Problem))" }
+            if ($pc -eq 22) { $stackDisabled += "$($t.n) disabled (user/policy)" }
+            elseif ($pc -and $pc -ne 0) { $stackProblem += "$($t.n) problem code $pc ($($d.Problem))" }
             # Upgrade-casualty signature: our Intel hardware bound to an inbox/OS
             # driver (verified property keys: DriverProvider / DriverInfPath)
             $prov   = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverProvider').Data
@@ -150,10 +152,12 @@ if ($fwSeen -eq 0) { Write-Output 'FW: no version values found under Vision/usbb
 # --- Layer 3: camera health (the ticket states) ---
 $camDevices = Get-PnpDevice -Class Camera,Image -PresentOnly
 $camProblem = @()
+$camDisabled = @()
 foreach ($c in $camDevices) {
     $pc = Get-ProblemCode $c.InstanceId
     Write-Output ("CAMERA: {0} [{1}] problem={2}" -f $c.FriendlyName, $c.Status, $pc)
-    if ($pc -and $pc -ne 0) { $camProblem += "$($c.FriendlyName) problem code $pc ($($c.Problem))" }
+    if ($pc -eq 22) { $camDisabled += "$($c.FriendlyName) disabled (user/policy)" }
+    elseif ($pc -and $pc -ne 0) { $camProblem += "$($c.FriendlyName) problem code $pc ($($c.Problem))" }
 }
 if ($camDevices.Count -eq 0) {
     Write-Output 'CAMERA: NONE PRESENT - zero camera-class devices = "we can''t find your camera" ticket state'
@@ -171,9 +175,13 @@ $fsErr | Select-Object -First 3 | ForEach-Object {
 }
 
 $broken = @()
-if ($camDevices.Count -eq 0) { $broken += 'no camera devices present' }
+if ($camDevices.Count -eq 0 -and ($camDisabled.Count + $stackDisabled.Count) -eq 0) { $broken += 'no camera devices present' }
 $broken += $camProblem
 $broken += $stackProblem
+$allDisabled = @($camDisabled + $stackDisabled)
+if ($allDisabled.Count) {
+    Write-Output "DISABLED (deliberate, not a fault - driver update will not enable): $($allDisabled -join '; ')"
+}
 if ($fsErr.Count -ge 5) { $broken += "$($fsErr.Count) FrameServer error events in 7d" }
 
 # --- Optional: busy guard (purely informational - NOTHING is stopped) ---
