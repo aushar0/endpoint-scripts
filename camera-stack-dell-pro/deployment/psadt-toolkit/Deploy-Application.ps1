@@ -238,6 +238,41 @@ Try {
             $script:rca | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $script:stageDir 'last_run.json') -Encoding UTF8
         } catch { Write-Output "HW9TN|phase=JSON|status=save-failed|$($_.Exception.Message)" }
     }
+    function Write-RunSummary {
+        ## Outcome-first run summary: what was run, what the result was. Written to
+        ## the PSADT log (readable) and stored in last_run.json for automated support.
+        param([int]$Code)
+        $d = $script:rca; $m = $d['meta']
+        $result = switch ($Code) {
+            0       { 'COMPLETED - no restart required' }
+            3010    { "COMPLETED - restart pending at the user's discretion (finalizes at the next restart)" }
+            1618    { 'DEFERRED - camera in use throughout the wait window; no changes were made' }
+            default { "FAILED (exit $Code)" + $(if ($d['errors']) { ' - ' + ($d['errors'] -join '; ') } else { '' }) }
+        }
+        $lines = @(
+            '==============================================================',
+            ' DEPLOYMENT SUMMARY',
+            '==============================================================',
+            " Product:    Intel Camera Stack Driver Package ($($m['package']), $($m['version']))",
+            " Machine:    family $($m['family']), BIOS $($m['bios']), Windows build $($m['build'])",
+            " Operation:  $($d['type'])",
+            " Result:     $result"
+        )
+        If ($d.Contains('install')) {
+            $lines += " Components: $($d['install']['ok']) of $($d['install']['total']) driver packages installed on matching devices"
+        }
+        If ($d.Contains('post_state')) {
+            $lines += " Camera:     $($d['post_state'])"
+        }
+        If ($d.Contains('cleanup')) {
+            $lines += " Cleanup:    $($d['cleanup']['deleted'].Count) superseded package(s) removed; $($d['cleanup']['skipped'].Count) retained (in use)"
+        }
+        $dur = [int]((Get-Date) - $script:runStart).TotalMinutes
+        $lines += " Duration:   $dur minute(s) | Log folder: $($script:stageDir)"
+        $lines += '=============================================================='
+        $lines | ForEach-Object { Write-Log -Message $_ -Source 'HW9TN' }
+        $d['exit_code'] = $Code; $d['result'] = $result; $d['summary'] = $lines -join "`n"
+    }
 
     function Invoke-CameraStackInstall {
         ## Gate + family
@@ -258,6 +293,10 @@ Try {
         $script:stageDir = "C:\ProgramData\DellCamera\$($pkg.id)\v$($pkg.version)"
         $script:machineLog = Join-Path $script:stageDir 'machine.log'
         $script:rca = [ordered]@{ started = (Get-Date -Format s); type = $DeploymentType }
+        $script:runStart = Get-Date
+        $script:rca['meta'] = @{ family = $family; package = $pkg.id; version = $pkg.version }
+        $script:rca['pre_devices'] = @(); $script:rca['post_devices'] = @()
+        $script:rca['rebinds'] = @(); $script:rca['errors'] = @()
         New-Item -ItemType Directory -Force -Path $script:stageDir | Out-Null
         Add-Content -Path $script:machineLog -Value "HW9TN|run-start|$(Get-Date -Format s)|type=$DeploymentType" -Encoding UTF8
         Write-Rca 'PRE' "family=$family|pkg=$($pkg.id)|ver=$($pkg.version)" `
@@ -269,6 +308,7 @@ Try {
         $dcu = if (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
                            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
                     Where-Object { $_.DisplayName -match 'Dell Command' }) { 'present' } else { 'absent' }
+        $script:rca['meta']['bios'] = $bios; $script:rca['meta']['build'] = $os.BuildNumber
         Write-Rca 'ctx' ("bios=$bios|build={0}|os_changed={1:yyyy-MM-dd}|winold={2}|dcu={3}" -f `
             $os.BuildNumber, $os.InstallDate, (Test-Path 'C:\Windows.old'), $dcu) `
             -Message ("System: BIOS {0}, build {1}, last feature update {2:yyyy-MM-dd}, Dell Command Update {3}." -f `
@@ -284,6 +324,7 @@ Try {
             $preState[$d.InstanceId] = @{ drv = $cur; inf = $inf; prov = $prov; prob = $prob }
             $short = $hw[0] -replace '^.*\\', ''
             $gloss = if ($prob -and $prob -ne 0 -and $probGloss[[int]$prob]) { " $($probGloss[[int]$prob])" } else { '' }
+            $script:rca['pre_devices'] += [pscustomobject]@{ id = $short; drv = $cur; inf = $inf; prov = $prov; prob = $prob }
             Write-Rca 'dev' ("$short|drv=$(if ($cur) { $cur } else { 'NONE' })|prob=$prob") `
                 -Message ("  $short : driver $(if ($cur) { $cur } else { 'NONE' }), provider $(if ($prov) { $prov } else { '?' })$(if ($prob -and $prob -ne 0) { ", problem $prob -$gloss" } else { '' })")
         }
@@ -300,9 +341,10 @@ Try {
         If (Test-CameraStreaming) {
             Write-Rca 'WAIT' "camera=busy|result=gave-up-after-${MaxWaitMinutes}m" `
                 -Message "Camera stayed in use the whole ${MaxWaitMinutes}m - stopping quietly; the next scheduled run tries again."
-            Save-RcaJson
+            Write-RunSummary 1618; Save-RcaJson
             return 1618
         }
+        $script:rca['wait'] = @{ polls = $poll; result = 'idle' }
         Write-Rca 'WAIT' "camera=idle|polls=$poll" -Message "Camera is idle - proceeding."
 
         ## Obtain + verify + extract
@@ -312,16 +354,18 @@ Try {
             Write-Rca 'DL' "src=local-override" -Message "Using local package copy: $LocalPackage"
         }
         If (-not (Test-Path $exePath)) {
-            If (-not $pkg.url) { Write-Rca 'DL' 'src=none|status=no-url' -Message "No download URL configured for this package."; Save-RcaJson; return 1 }
+            If (-not $pkg.url) { $script:rca['errors'] += 'no download URL configured'; Write-Rca 'DL' 'src=none|status=no-url' -Message "No download URL configured for this package."; Write-RunSummary 1; Save-RcaJson; return 1 }
             Write-Rca 'DL' "src=dl.dell.com" -Message "Downloading $($pkg.exe) via BITS..."
             try { Start-BitsTransfer -Source $pkg.url -Destination $exePath -ErrorAction Stop }
-            catch { Write-Rca 'DL' "status=failed|$($_.Exception.Message)" -Message "Download failed: $($_.Exception.Message)"; Save-RcaJson; return 1 }
+            catch { $script:rca['errors'] += "download failed"; Write-Rca 'DL' "status=failed|$($_.Exception.Message)" -Message "Download failed: $($_.Exception.Message)"; Write-RunSummary 1; Save-RcaJson; return 1 }
         }
         $sigChk = Get-AuthenticodeSignature $exePath
         If ($sigChk.Status -ne 'Valid' -or $sigChk.SignerCertificate.Subject -notmatch 'Dell') {
             Write-Rca 'DL' "sig=INVALID|$($sigChk.Status)" -Message "Package signature check failed ($($sigChk.Status)) - refusing to run."
-            Save-RcaJson; return 1
+            $script:rca['errors'] += "package signature invalid"
+            Write-RunSummary 1; Save-RcaJson; return 1
         }
+        $script:rca['download'] = @{ verified = $true; bytes = (Get-Item $exePath).Length }
         Write-Rca 'DL' "sig=Dell-valid|bytes=$((Get-Item $exePath).Length)" -Message "Package verified (Dell-signed)."
         $exDir = Join-Path $script:stageDir 'extract'
         If (-not (Test-Path "$exDir\16299")) {
@@ -330,7 +374,7 @@ Try {
             Write-Rca 'DL' "extract=done|exit=$($p.ExitCode)" -Message "Package extracted."
         }
         $infs = @(Get-ChildItem "$exDir\16299\Drivers" -Recurse -Filter *.inf)
-        If ($infs.Count -eq 0) { Write-Rca 'DL' 'extract=no-infs' -Message 'No INFs found after extraction.'; Save-RcaJson; return 1 }
+        If ($infs.Count -eq 0) { $script:rca['errors'] += 'no INFs found after extraction'; Write-Rca 'DL' 'extract=no-infs' -Message 'No INFs found after extraction.'; Write-RunSummary 1; Save-RcaJson; return 1 }
 
         ## INSTALL
         $installed = 0
@@ -345,9 +389,11 @@ Try {
             $pc2 = Get-Prop $d.InstanceId 'DEVPKEY_Device_ProblemCode'
             $isCam = $d.Class -in 'Camera', 'Image'
             If (($isCam -or ($pc2 -and $pc2 -ne 0)) -and $pc2 -ne 22) {
+                $script:rca['rebinds'] += $d.InstanceId
                 Execute-Process -Path 'pnputil.exe' -Parameters "/restart-device `"$($d.InstanceId)`"" -CreateNoWindow -PassThru -IgnoreExitCodes '*' -ContinueOnError $true | Out-Null
             }
         }
+        $script:rca['install'] = @{ total = $infs.Count; ok = $installed }
         Write-Rca 'INSTALL' "infs=$($infs.Count)|ok=$installed" -Message "Installed $installed of $($infs.Count) driver packages."
 
         ## CLEANUP: delete unbound superseded family packages only
@@ -370,6 +416,7 @@ Try {
                 }
             }
         } catch { Write-Rca 'CLEANUP' "status=enum-failed" -Message "Driver store enumeration failed; cleanup skipped (not fatal)." }
+        $script:rca['cleanup'] = @{ deleted = $deleted; skipped = $skipped }
         Write-Rca 'CLEANUP' ("deleted={0}|skipped_bound={1}" -f `
             $(if ($deleted) { $deleted -join ',' } else { 'none' }),
             $(if ($skipped) { $skipped -join ',' } else { 'none' })) `
@@ -384,8 +431,10 @@ Try {
             $prob = Get-Prop $d.InstanceId 'DEVPKEY_Device_ProblemCode'
             If ($prob -eq 14) { $pending++ }
             If ($prob -and $prob -ne 0 -and $prob -ne 14) { $postProblems++ }
+            $pcur = Get-Prop $d.InstanceId 'DEVPKEY_Device_DriverVersion'
+            $script:rca['post_devices'] += [pscustomobject]@{ id = (($hw -join ';') -replace '^.*\\', ''); drv = $pcur; prob = $prob }
             If ($preState.ContainsKey($d.InstanceId)) {
-                If ($preState[$d.InstanceId].drv -ne (Get-Prop $d.InstanceId 'DEVPKEY_Device_DriverVersion')) { $changed++ }
+                If ($preState[$d.InstanceId].drv -ne $pcur) { $changed++ }
             } Else { $changed++ }
         }
         Write-Rca 'POST' ("camera=$camCount|prob_nonzero=$postProblems|pending14=$pending|stack_changed=$changed") `
@@ -396,9 +445,11 @@ Try {
                 ForEach-Object { "{0}: {1}" -f $_.LineNumber, $_.Line } | Set-Content $slice -Encoding UTF8
             Write-Rca 'POST' "setupapi_slice=$slice" -Message "  Driver-install history saved to $slice."
         }
+        $script:rca['post_state'] = "$(if ($camCount -gt 0) { "present ($camCount device(s)), $(if ($pending -gt 0) { "$pending finalize at next restart" } elseif ($postProblems -eq 0) { 'operating normally' } else { "$postProblems still reporting problems" })" } else { 'not present' })"
+        $exitCode = If ($pending -gt 0 -or $postProblems -gt 0) { 3010 } else { 0 }
+        Write-RunSummary $exitCode
         Save-RcaJson
-        If ($pending -gt 0 -or $postProblems -gt 0) { return 3010 }
-        return 0
+        return $exitCode
     }
 
     function Invoke-CameraStackUninstall {
