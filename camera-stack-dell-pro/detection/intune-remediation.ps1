@@ -118,6 +118,17 @@ foreach ($inf in $infs) {
     Write-Output "add-driver $($inf.Name): $ok success line(s)"
 }
 & pnputil.exe /scan-devices | Out-Null
+
+# --- Force live rebind: restart devnodes that didn't recover on their own ---
+# Disabled devices (code 22) are never touched - a restart would not enable them.
+foreach ($d in (Get-PnpDevice -PresentOnly)) {
+    $pc2 = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
+    $isCam = $d.Class -in 'Camera', 'Image'
+    if (($isCam -or ($pc2 -and $pc2 -ne 0)) -and $pc2 -ne 22) {
+        $r = & pnputil.exe /restart-device "$($d.InstanceId)" 2>&1
+        Write-Output ("REBIND: {0} [{1}] -> {2}" -f $d.FriendlyName, $pc2, (($r | Select-Object -Last 1) -replace '^\s+', ''))
+    }
+}
 Start-Sleep -Seconds 5
 
 # --- old-driver cleanup: delete UNBOUND superseded family packages only ---

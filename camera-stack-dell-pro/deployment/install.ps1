@@ -85,6 +85,19 @@ try {
 
     # Trigger re-enumeration so staged drivers bind to any raw/failing devices now
     & pnputil.exe /scan-devices | Out-Null
+    # --- Force live rebind: restart devnodes that didn't recover on their own ---
+    # scan-devices rebinds most machines; this catches the rest so the fix lands
+    # LIVE instead of waiting for a reboot. Disabled devices (code 22) are never
+    # touched - a restart would not enable them anyway (deliberate choice).
+    foreach ($d in (Get-PnpDevice -PresentOnly)) {
+        $pc2 = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
+        $isCam = $d.Class -in 'Camera', 'Image'
+        if (($isCam -or ($pc2 -and $pc2 -ne 0)) -and $pc2 -ne 22) {
+            $r = & pnputil.exe /restart-device "$($d.InstanceId)" 2>&1
+            Write-Output ("REBIND: {0} [{1}] -> {2}" -f $d.FriendlyName, $pc2, (($r | Select-Object -Last 1) -replace '^\s+', ''))
+        }
+    }
+
 
     # --- Old-driver cleanup: the DUP's removal step, deferred until SAFE ---
     # Delete superseded family packages from the store ONLY when (a) same
