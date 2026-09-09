@@ -251,3 +251,4 @@ controlled experiment.
 - [Dell KB 000248760 — MIPI camera may not work under Windows](https://www.dell.com/support/kbdoc/en-us/000248760/laptop-mipi-camera-may-not-work-under-windows)
 - [PSAppDeployToolkit](https://psappdeploytoolkit.com) (bundled under LGPL-3.0)
 - Dell driver page: [HW9TN](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=hw9tn)
+- [How the packages were analyzed](docs/installer-analysis.md) — the full decomposition case study
