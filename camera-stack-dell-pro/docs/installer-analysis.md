@@ -23,16 +23,15 @@ later evidence, (LOW) = untested assumption.*
 
 ---
 
-## 0. The original question
+## 0. The question under investigation
 
-> "Analyze why this camera driver installer requires a 'reboot' to finish
-> installing. Any way for us to force the camera to initialize without a
-> reboot?"
+Why does the installer require a restart to finish, and can the camera be
+brought up without one?
 
-Subject: `Intel-2D-Imaging-USB-IO-Vision-Driver-for-Camera_HW9TN_WIN64_80.25982.6.32...exe`
-(actual: HW9TN WIN64 80.26100.0.29 **A13**, 95 MB, Dell Update Package format).
-The question later expanded into a full detection/remediation program, but the
-reboot question is where everything started.
+Subject: `Intel-2D-Imaging-USB-IO-Vision-Driver-for-Camera_HW9TN_WIN64_80.26100.0.29_A13.exe`
+(95 MB, Dell Update Package format). The question later expanded into a full
+detection/remediation program, but the reboot question is where everything
+started.
 
 ---
 
