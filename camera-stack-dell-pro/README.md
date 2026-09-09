@@ -225,6 +225,12 @@ The driver-package download and extraction cache stays separate, under
 `C:\ProgramData\DellCamera\<package>\v<version>\` — it is cache, not
 evidence, and can be large.
 
+This kit installs driver INF packages and has no MSI or InstallShield
+components, so its evidence folder carries the run records, the event
+stream, and the captured setupapi history. Kits that wrap MSI or
+InstallShield installers add their logs and response files to the same
+folder.
+
 When the post-install check finds problems, a `setupapi_camera_slice.log`
 (Windows driver-install history, filtered to the camera INFs) is captured
 automatically — the forensic record of what the OS did to the camera stack.

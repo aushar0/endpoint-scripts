@@ -31,6 +31,10 @@ Event Viewer can't even see.*
 - One folder per kit; the kit's README is the front door.
 - **README commands are executed and verified before shipping** — the same
   standard as code. A command that hasn't run doesn't get documented.
+- **One evidence folder per package** (`<log root>\<app>-<version>-<deployment
+  type>`): the kit's structured records plus every log the deployment
+  generates — MSI logs, EXE installer logs, InstallShield response files
+  (`.iss`) where used — alongside PSADT's own log.
 - No vendor binaries committed — packages are fetched from the publisher at
   deploy time and verified (Authenticode signer + published hash).
 - Dual-surface logging wherever a kit acts on a machine: a readable narrative
