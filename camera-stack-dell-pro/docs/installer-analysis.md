@@ -6,6 +6,21 @@ included. Every load-bearing claim carries its evidence anchor. Confidence
 tags: (HIGH) = read from artifact/log directly, (MED) = inference validated by
 later evidence, (LOW) = untested assumption.*
 
+## Key findings (quick reference)
+
+| # | Finding | Confidence |
+|---|---|---|
+| 1 | The reboot demand is three layers: DUP metadata (`rebootRequired="true"` in package.xml), installer problem-code checks (codes 14/15), and the Synaptics bridge firmware flash (200 s max). | HIGH |
+| 2 | None of the 14 driver INFs contain reboot directives — Windows does not itself require the reboot for this stack. | HIGH |
+| 3 | The DUP's real sequence is: SSID applicability check → old-driver removal utility → install → reboot prompt. The removal utility (`Uninstall_driver_v3.py`) ships inside a PyInstaller bundle alongside the SSID check. | HIGH |
+| 4 | Old-driver removal is NOT required for the fix — a newer, more hardware-specific package wins rank on re-enumeration. Removal is recurrence prevention. | HIGH |
+| 5 | Packages are subsystem-locked, not model-generic: HW9TN A13 binds only SUBSYS 0CDC/0CF8 (LNL) + 0CE8/0CF7 (ARL) = Dell Pro 14 Plus; 845M5 A12 binds 0CE3/0CE4 = Dell Pro 13/14 Premium. No generic IDs exist in either package. | HIGH |
+| 6 | Firmware state: registry `CurrentFWVersion` carries the vision-extension INF version — `>= 133.152.66.0` ⇔ firmware family `>= 8.5.98.42`. `TargetVersion`/`UpdateVersion` are always 0.0.0.0 (dead placeholders, never populated). | HIGH |
+| 7 | A missing camera leaves NO Event Viewer evidence at any level — detectable only via PnP enumeration. Pre-mortem signals: Kernel-PnP Warn id=1000 (vetoed removal, device was in use) and FsProxy init history. | HIGH |
+| 8 | A deleted camera devnode with a jammed config queue cannot be restored live by any method (scan / restart / disable-enable / remove) — reboot only. The USB composite parent sharing the hub constrains hub-level resets too. | HIGH |
+| 9 | Dell KB 000248760 covers this exact ticket class; its dependency list (BIOS camera enable, chipset, graphics, ISH, Serial I/O, ME) defines the "drivers current but camera broken" route. | HIGH |
+| 10 | `package.xml` is UTF-16; several INFs likewise — text tooling must BOM-detect before parsing. | HIGH |
+
 ---
 
 ## 0. The original question
@@ -130,12 +145,10 @@ SSID check → **uninstall-scrub of old driver packages** → install new →
 reboot prompt. The removal utility Dell's documentation references lives
 inside this PyInstaller bundle.
 
-**Dead end on record:** an attempt to parse the PyInstaller CArchive to read
-`bSupportSSID.json` directly failed (cookie-magic typo on first attempt;
-`IPU_uninstall_v3.py` string absent in the A13 bundle — present in the A12
-sibling, packaging drifted between revisions). Rendered moot: the question it
-would have answered (which systems are supported) was already answered three
-ways (Dell's compatible-systems page, the manifest, the INF subsystems).
+**Do not retry:** parsing the CArchive for `bSupportSSID.json` — unnecessary
+(support scope is triple-answered: Dell's page, the manifest, the INF
+subsystems), and the embedded script list drifts between revisions
+(`IPU_uninstall_v3.py` present in A12, absent in A13).
 
 ---
 
