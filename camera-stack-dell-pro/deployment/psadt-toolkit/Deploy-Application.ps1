@@ -428,8 +428,8 @@ Try {
         ##*===============================================
         [String]$installPhase = 'Pre-Installation'
 
-        ## Deliberately NO Show-InstallationWelcome / Show-InstallationProgress:
-        ## this deployment never prompts, never closes applications, never shows UI.
+        ## No Show-InstallationWelcome: in Silent mode its -CloseApps path closes
+        ## applications without prompting, which this deployment never does.
 
         ##*===============================================
         ##* MARK: INSTALLATION
@@ -443,7 +443,6 @@ Try {
         ##*===============================================
         [String]$installPhase = 'Post-Installation'
 
-        ## Deliberately NO Show-InstallationPrompt (unattended by design).
     }
     ElseIf ($deploymentType -ieq 'Uninstall') {
         ##*===============================================
