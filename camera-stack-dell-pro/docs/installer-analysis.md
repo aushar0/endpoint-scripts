@@ -246,27 +246,3 @@ just-installed package is never eligible even while unbound during a pending
 restart. Removal happens when unused: immediately if devices rebind live, at
 the user's natural restart otherwise. Same hygiene, no ceremony, and the
 camera keeps working throughout.
-
-## 11. Boot-testing the packaged deployment: three defects found
-
-The complete deployment package (official PSAppDeployToolkit 3.10.2 plus the
-wrapper) was assembled in a virtual machine from the same public artifacts a
-colleague would use: the toolkit downloaded from its release, the wrapper
-fetched from the repository at a pinned commit. Commit pinning is not
-optional; an earlier retest silently fetched a stale wrapper from the CDN,
-byte-identical in size, and produced a false pass.
-
-Three defects surfaced, all of which would have failed silently in
-production:
-
-1. **The toolkit import was commented out.** The wrapper shipped as a snippet
-   rather than a complete script; no function resolved, and the bootstrap
-   executable still reported exit 0. The missing log file exposed it.
-2. **CDN cache masking**, as above.
-3. **A missing `-DeploymentType` parameter.** The bootstrap always passes it;
-   a parameter block without it aborts instantly while the bootstrap reports
-   0. The template's own parameter block and the installer log line listing
-   passed parameters confirmed the cause.
-
-The corrected run initializes cleanly, exits through the hardware gate with
-the wrapper's log source visible in the toolkit log, and returns 0.
