@@ -215,8 +215,11 @@ Everything a run observes and does is recorded in four places:
 |---|---|
 | `C:\Windows\Logs\Software\...CameraStack...log` | The deployment log (PSADT) — a plain-English narrative, with problem codes translated to text |
 | `C:\ProgramData\DellCamera\<package>\machine.log` | Machine-readable event lines (`key=value`), built for grep and fleet-wide analysis |
-| `C:\ProgramData\DellCamera\<package>\last_run.json` | A full pre/post snapshot of the last run |
+| `C:\ProgramData\DellCamera\<package>un-<timestamp>.json` | One structured record per run (newest 20 kept): device inventories before and after, actions, timings, errors, exit code. `last_run.json` always mirrors the newest record as a stable path for tooling. |
 | stdout | The same machine lines, captured by Intune / Remediations reporting |
+
+Every run closes with a DEPLOYMENT SUMMARY block in the PSADT log stating
+the outcome and naming the run record it wrote.
 
 When the post-install check finds problems, a `setupapi_camera_slice.log`
 (Windows driver-install history, filtered to the camera INFs) is captured

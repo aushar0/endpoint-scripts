@@ -232,10 +232,16 @@ Try {
         If ($script:machineLog) { Add-Content -Path $script:machineLog -Value $machine -Encoding UTF8 }
     }
     function Save-RcaJson {
+        ## Writes a timestamped record per run (history, newest 20 kept) and
+        ## refreshes last_run.json as the stable pointer for tooling.
         $script:rca['finished'] = Get-Date -Format s
         try {
             New-Item -ItemType Directory -Force -Path $script:stageDir | Out-Null
-            $script:rca | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $script:stageDir 'last_run.json') -Encoding UTF8
+            $record = Join-Path $script:stageDir $(if ($script:rca['record_file']) { $script:rca['record_file'] } else { "run-$(Get-Date -Format 'yyyyMMdd-HHmmss').json" })
+            $script:rca | ConvertTo-Json -Depth 4 | Set-Content $record -Encoding UTF8
+            Copy-Item $record (Join-Path $script:stageDir 'last_run.json') -Force
+            Get-ChildItem $script:stageDir -Filter 'run-*.json' | Sort-Object Name -Descending |
+                Select-Object -Skip 20 | Remove-Item -Force -ErrorAction SilentlyContinue
         } catch { Write-Output "HW9TN|phase=JSON|status=save-failed|$($_.Exception.Message)" }
     }
     function Write-RunSummary {
@@ -243,6 +249,7 @@ Try {
         ## the PSADT log (readable) and stored in last_run.json for automated support.
         param([int]$Code)
         $d = $script:rca; $m = $d['meta']
+        $d['record_file'] = "run-$(Get-Date -Format 'yyyyMMdd-HHmmss').json"
         $result = switch ($Code) {
             0       { 'COMPLETED - no restart required' }
             3010    { "COMPLETED - restart pending at the user's discretion (finalizes at the next restart)" }
@@ -269,6 +276,7 @@ Try {
         }
         $dur = [int]((Get-Date) - $script:runStart).TotalMinutes
         $lines += " Duration:   $dur minute(s) | Log folder: $($script:stageDir)"
+        $lines += " Run record: $(Join-Path $script:stageDir $d['record_file']) (machine-readable, full run detail)"
         $lines += '=============================================================='
         $lines | ForEach-Object { Write-Log -Message $_ -Source 'HW9TN' }
         $d['exit_code'] = $Code; $d['result'] = $result; $d['summary'] = $lines -join "`n"
