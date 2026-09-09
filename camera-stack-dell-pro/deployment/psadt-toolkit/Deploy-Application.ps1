@@ -195,6 +195,11 @@ Try {
     ## lines in the PSADT log, strict key=value lines to machine.log plus a
     ## last_run.json snapshot, all under C:\ProgramData\DellCamera\<package>\.
 
+    ## Evidence directory follows the per-package log convention:
+    ## <PSADT log root>\<app name>-<app version>-<deployment type>\
+    $safeAppName = ($appName -replace '[\\/:*?"<>|()]', '' -replace '\s+', ' ').Trim()
+    [String]$script:logDir = Join-Path $configToolkitLogDir ("{0}-{1}-{2}" -f $safeAppName, $appVersion, $deploymentType)
+
     $manifest = @{
         PB = @{ id = 'HW9TN'; version = '80.26100.0.29-A13'
                 url  = 'https://dl.dell.com/FOLDER14812487M/1/Intel-2D-Imaging-USB-IO-Vision-Driver-for-Camera_HW9TN_WIN64_80.26100.0.29_A13.EXE'
@@ -236,11 +241,11 @@ Try {
         ## refreshes last_run.json as the stable pointer for tooling.
         $script:rca['finished'] = Get-Date -Format s
         try {
-            New-Item -ItemType Directory -Force -Path $script:stageDir | Out-Null
-            $record = Join-Path $script:stageDir $(if ($script:rca['record_file']) { $script:rca['record_file'] } else { "run-$(Get-Date -Format 'yyyyMMdd-HHmmss').json" })
+            New-Item -ItemType Directory -Force -Path $script:logDir | Out-Null
+            $record = Join-Path $script:logDir $(if ($script:rca['record_file']) { $script:rca['record_file'] } else { "run-$(Get-Date -Format 'yyyyMMdd-HHmmss').json" })
             $script:rca | ConvertTo-Json -Depth 4 | Set-Content $record -Encoding UTF8
-            Copy-Item $record (Join-Path $script:stageDir 'last_run.json') -Force
-            Get-ChildItem $script:stageDir -Filter 'run-*.json' | Sort-Object Name -Descending |
+            Copy-Item $record (Join-Path $script:logDir 'last_run.json') -Force
+            Get-ChildItem $script:logDir -Filter 'run-*.json' | Sort-Object Name -Descending |
                 Select-Object -Skip 20 | Remove-Item -Force -ErrorAction SilentlyContinue
         } catch { Write-Output "HW9TN|phase=JSON|status=save-failed|$($_.Exception.Message)" }
     }
@@ -275,8 +280,8 @@ Try {
             $lines += " Cleanup:    $($d['cleanup']['deleted'].Count) superseded package(s) removed; $($d['cleanup']['skipped'].Count) retained (in use)"
         }
         $dur = [int]((Get-Date) - $script:runStart).TotalMinutes
-        $lines += " Duration:   $dur minute(s) | Log folder: $($script:stageDir)"
-        $lines += " Run record: $(Join-Path $script:stageDir $d['record_file']) (machine-readable, full run detail)"
+        $lines += " Duration:   $dur minute(s) | Log folder: $($script:logDir)"
+        $lines += " Run record: $(Join-Path $script:logDir $d['record_file']) (machine-readable, full run detail)"
         $lines += '=============================================================='
         $lines | ForEach-Object { Write-Log -Message $_ -Source 'HW9TN' }
         $d['exit_code'] = $Code; $d['result'] = $result; $d['summary'] = $lines -join "`n"
@@ -299,13 +304,13 @@ Try {
             return 1
         }
         $script:stageDir = "C:\ProgramData\DellCamera\$($pkg.id)\v$($pkg.version)"
-        $script:machineLog = Join-Path $script:stageDir 'machine.log'
+        $script:machineLog = Join-Path $script:logDir 'machine.log'
         $script:rca = [ordered]@{ started = (Get-Date -Format s); type = $DeploymentType }
         $script:runStart = Get-Date
+        New-Item -ItemType Directory -Force -Path $script:stageDir, $script:logDir | Out-Null
         $script:rca['meta'] = @{ family = $family; package = $pkg.id; version = $pkg.version }
         $script:rca['pre_devices'] = @(); $script:rca['post_devices'] = @()
         $script:rca['rebinds'] = @(); $script:rca['errors'] = @()
-        New-Item -ItemType Directory -Force -Path $script:stageDir | Out-Null
         Add-Content -Path $script:machineLog -Value "HW9TN|run-start|$(Get-Date -Format s)|type=$DeploymentType" -Encoding UTF8
         Write-Rca 'PRE' "family=$family|pkg=$($pkg.id)|ver=$($pkg.version)" `
             -Message "Target confirmed (family $family): package $($pkg.id) v$($pkg.version). Working folder: $($script:stageDir)"
@@ -448,7 +453,7 @@ Try {
         Write-Rca 'POST' ("camera=$camCount|prob_nonzero=$postProblems|pending14=$pending|stack_changed=$changed") `
             -Message ("Result: $(if ($camCount -gt 0 -and $postProblems -eq 0 -and $pending -eq 0) { 'camera present and healthy - no restart needed' } elseif ($pending -gt 0) { "installed - $pending device(s) finish at the user's next restart" } elseif ($camCount -eq 0) { 'PROBLEM: no camera visible after install - capturing evidence' } else { "installed but $postProblems device(s) still report problems - capturing evidence" }).")
         If ($postProblems -gt 0 -or $camCount -eq 0) {
-            $slice = Join-Path $script:stageDir 'setupapi_camera_slice.log'
+            $slice = Join-Path $script:logDir 'setupapi_camera_slice.log'
             Select-String -Path 'C:\Windows\INF\setupapi.dev.log' -Pattern 'iacamera|hm1092|ov08x40|ov05c10|iactrllogic|iaisp|usbbridge|Vision\.inf' -ErrorAction SilentlyContinue |
                 ForEach-Object { "{0}: {1}" -f $_.LineNumber, $_.Line } | Set-Content $slice -Encoding UTF8
             Write-Rca 'POST' "setupapi_slice=$slice" -Message "  Driver-install history saved to $slice."
