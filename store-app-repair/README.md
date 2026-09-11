@@ -34,18 +34,41 @@ Get-WinEvent -LogName 'Microsoft-Windows-TwinUI/Operational' -MaxEvents 20 |
 Both logs are readable by a standard user.
 
 **Step 2 - re-register the app and every dependency it currently resolves.** No
-download, no package, uses the files already staged on disk:
+download, no package, uses the files already staged on disk. Expected hiccups
+print as quiet `SKIP` lines (full error text still lands in a `%TEMP%` log for
+escalation) - a red wall of `Add-AppxPackage` errors is not part of this block:
 
 ```powershell
+$log = Join-Path $env:TEMP ("store-app-repair-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+"store-app-repair $(Get-Date) user=$env:USERNAME" | Out-File $log -Encoding utf8
 foreach ($n in 'Microsoft.WindowsCalculator','Microsoft.ScreenSketch') {
   $p = Get-AppxPackage -Name $n -ErrorAction SilentlyContinue
-  if ($p) { $p.Dependencies + $p | ForEach-Object {
-      Add-AppxPackage -DisableDevelopmentMode -Register "$($_.InstallLocation)\AppxManifest.xml" -ErrorAction Continue } }
+  if (-not $p) { "SKIP   $n (not installed for this user)"; continue }
+  $targets = @($p.Dependencies | Where-Object PackageFamilyName -ne $p.PackageFamilyName) + $p
+  foreach ($pkg in $targets) {
+    $errs = @()
+    try {
+      Add-AppxPackage -DisableDevelopmentMode -Register "$($pkg.InstallLocation)\AppxManifest.xml" -ErrorAction Stop
+    }
+    catch { $errs = @($_) }
+    if (-not $errs) { "OK     $($pkg.Name) $($pkg.Version)" }
+    elseif ("$($errs.Exception)" -match '0x80073D02|0x80073D06') {
+      "SKIP   $($pkg.Name) (in use / newer already present - expected, harmless)"
+      $errs.Exception.Message | Out-File $log -Append -Encoding utf8
+    }
+    else {
+      "FAIL   $($pkg.Name) - details: $log"
+      $errs.Exception.Message | Out-File $log -Append -Encoding utf8
+    }
+  }
 }
+"Details log: $log"
 ```
 
-`0x80073D02` on a framework means it is in use by other apps, not broken - that
-line is a skip, not a failure. Works for any Store app: swap the package names.
+`SKIP` = the framework is in use by other running apps (`0x80073D02`) or a newer
+copy is already registered (`0x80073D06`) - both are healthy states, not
+failures. Only `FAIL` lines matter; those carry the real error in the log file.
+Works for any Store app: swap the package names.
 
 **Step 3 - if it still won't open:** reset the app's per-user state (settings and
 cache), then re-check:
@@ -65,6 +88,27 @@ Add-AppxPackage -Path 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx'
 There are no aka.ms permalinks for the other frameworks. For those, use the
 repair script below, which fetches any missing framework from Microsoft's own
 update channel at run time.
+
+## Blast radius
+
+Per-user app state lives in `%LOCALAPPDATA%\Packages\<PackageFamilyName>`:
+settings, history, sign-in state, app caches. What each step touches:
+
+| Step | Touches | Destructive? |
+|---|---|---|
+| Step 2 re-register | Registration only | No. App data untouched; safe while apps run (in-use frameworks SKIP). |
+| Step 3 `Reset-AppxPackage` | That one app's per-user data | Yes - resets Calculator history/modes, Snipping Tool preferences, stored sign-in for that app. |
+| Repair script | Installs / re-registers the package | No - never removes or resets; worst case is `RESULT FAIL` + exit code. |
+| winget uninstall/reinstall | The app registration | No - uninstall leaves the data container on disk and reinstall re-attaches it (why corrupted state survives the dance). |
+
+Nothing here touches user documents, files saved outside the app container
+(e.g. Pictures\Screenshots), other apps, or Windows itself. If Step 3 is
+warranted on a machine where that app's settings matter, back the container up
+first:
+
+```powershell
+Copy-Item "$env:LOCALAPPDATA\Packages\Microsoft.WindowsCalculator_8wekyb3d8bbwe" "$env:TEMP\calc-state-backup" -Recurse
+```
 
 ## The one-command option: Repair-MsStoreApp.ps1
 
@@ -92,6 +136,11 @@ PackageFamilyName.
 
 Behavior details that matter in the field:
 
+- **Output contract.** Terse machine-readable lines only: `[INFO]/[WARN]/[ERR]`,
+  `DIAG key=value` checks (presence, dependency gaps, activation-failure count,
+  Store/update-channel reachability), and a final `RESULT PRESENT / MISSING /
+  REPAIRED / PROVISIONED / FAIL` line. A full timestamped log lands in
+  `%TEMP%\MsStoreRepair\<stamp>_<user>_<mode>.log`.
 - **Idempotent.** App registered at any version = "nothing to do", exit 0.
 - **Staged-but-unregistered is detected and repaired with zero download** when
   elevated: after an uninstall the package often remains staged machine-wide; the
@@ -105,7 +154,7 @@ Behavior details that matter in the field:
   `-SkipLicense`-style workarounds for paid apps; those need real licenses.
 - Exit codes: `0` repaired or already present, `1` input / family-name pin
   mismatch, `2` fetch failure, `3` signature gate, `4` install failure.
-  Every outcome prints a `RESULT:` line (detection contract).
+  Every outcome prints a `RESULT` line (detection contract).
 
 ## Elevation requirements (verified, not assumed)
 
@@ -134,19 +183,23 @@ found. The repair script's channel is independent of the Store endpoints.
 
 Live-tested end to end on a daily-driver box: full remove -> repair cycles for
 both apps in a standard-user session (runtime fetch, 8 files, all SHA-1 digests
-matched, all Authenticode-valid Microsoft-signed); elevated staged fast-path
-repair with no download; detection contract both ways; re-register ladder
-verbatim (including the expected `0x80073D02` in-use skips); Store blocked via
-hosts to reproduce a no-winget environment (`12007`/`0x80072ee7`) with the repair
-channel still working; `Add-AppxPackage -Path <URL>` downloads direct from the
-aka.ms permalink (fails `0x80073D06` only when a newer version is already
-installed, which is correct).
+matched, all Authenticode-valid Microsoft-signed, CF3 ladder fired both times);
+detection contract both ways (`RESULT` + exit 0/1); re-register ladder verbatim
+including the expected `0x80073D02` in-use skips (logged, classified SKIP);
+elevated staged fast-path repair with no download; Store blocked via hosts to
+reproduce a no-winget environment (`12007`/`0x80072ee7`) with the repair channel
+still working; `Add-AppxPackage -Path <URL>` downloads direct from the aka.ms
+permalink (fails `0x80073D06` only when a newer version is already installed,
+which is correct). Framework-removal guard verified: the OS refuses to remove a
+framework with registered dependents (`0x80073CF3` on remove), so the
+framework-missing state was reachable only via the staged/unregistered path.
 
-Not live-tested (named, not hidden): the SYSTEM provision branch of the script
-(`Add-AppxProvisionedPackage`) - implemented per the documented DISM lane but
-awaiting a managed-device run; real state-corruption could not be reproduced in
-the lab (Calculator tolerated a damaged state folder), so `Reset-AppxPackage` is
-verified as a cmdlet, not against a reproduced corruption.
+Not live-tested (named, not hidden): the SYSTEM branch of the repair script
+(`Add-AppxProvisionedPackage` + one-shot scheduled-task console-user handoff) -
+implemented per the documented DISM lane, awaiting an elevated run; real
+state-corruption could not be reproduced (Calculator tolerated a damaged state
+folder), so `Reset-AppxPackage` is verified as a cmdlet, not against a
+reproduced corruption.
 
 Sources: protocol basis is the anonymous FE3 update channel (same as
 store.rg-adguard.net, ported from the open-source StoreLib envelopes); the
