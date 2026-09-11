@@ -26,6 +26,15 @@ residue the update left behind.
 a camera that died 11 hours after a feature update, diagnosed from PnP state
 Event Viewer can't even see.*
 
+### [cloudpc-autopilot-group-audit](cloudpc-autopilot-group-audit/)
+
+Why some Windows 365 Cloud PCs never land in a ZTDID-based Autopilot dynamic
+group: the stamp is written at registration time and never backfilled, so a
+Cloud PC provisioned by a different path (older policy, hybrid join, or
+device preparation) has nothing for the rule to match. Ranks the four
+causes with the evidence that decides between them, and includes a Graph
+audit script that reports the deciding attribute for every missing device.
+
 ## Conventions
 
 - One folder per kit; the kit's README is the front door.
