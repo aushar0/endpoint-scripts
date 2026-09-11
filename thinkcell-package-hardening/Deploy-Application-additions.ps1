@@ -5,6 +5,11 @@
     Post-Install / Repair, entry cleanup for Post-Uninstall.
 
 .DESCRIPTION
+    v4 (Sep 11 2026): GUID-shape checks (derivation throws on a malformed
+    ProductCode; the function itself refuses to touch registry without a real
+    GUID - closes the write-under-Uninstall-root edge) and EstimatedSize now
+    measured from the actual install dir (self-maintaining across versions).
+
     v3 (Sep 11 2026): added an install-presence guard (never fabricates an ARP
     entry for a product that is not actually installed) and dual-surface
     logging (narrative lines for humans + THINKCELL_ARP key=value lines for
@@ -63,10 +68,20 @@ if (@($msiFile).Count -gt 1) { throw "Multiple MSIs in $script:dirFiles - keep e
 [string]$script:appDisplayVersion = Get-MsiProperty -MsiPath $script:msiPath -Property 'ProductVersion'
 $msiProductName = Get-MsiProperty -MsiPath $script:msiPath -Property 'ProductName'
 if ($msiProductName -ne 'think-cell') { throw "The MSI in Files is '$msiProductName', not 'think-cell' - wrong file in the package." }
+if ($script:appProductCode -notmatch '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
+    throw "Failed to read a valid ProductCode from $script:msiPath (got '$script:appProductCode') - Windows Installer may be having a problem."
+}
 # $appVersion = $script:appDisplayVersion   # <- optional: stop hand-bumping the version string
 
 # --- 2. Guarded, logged ARP-entry insurance function ---
 function Set-ThinkCellArpEntry {
+    # Defensive: never touch registry unless we hold a real GUID (protects against
+    # a hand-pasted copy in an old package where the derivation block is absent).
+    if ($script:appProductCode -notmatch '^\{[0-9A-Fa-f-]{36}\}$') {
+        Write-Log -Message "think-cell ARP: appProductCode is not a valid GUID ('$script:appProductCode') - skipping to avoid writing under the Uninstall root."
+        Write-Log -Message 'THINKCELL_ARP action=skip reason=invalid-productcode'
+        return
+    }
     $arpPaths = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$script:appProductCode",
                   "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$script:appProductCode")
 
@@ -105,6 +120,13 @@ function Set-ThinkCellArpEntry {
 
     # Recreate - WOW6432Node, where the 32-bit MSI itself publishes.
     $key = $arpPaths[1]
+    # EstimatedSize: measure the real install dir when present (self-maintaining
+    # across versions); 410786 is the measured fallback for 14.0.38.764.
+    $sizeKB = 410786
+    if (Test-Path $installDir) {
+        $measured = [math]::Round(((Get-ChildItem -Path $installDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum) / 1KB)
+        if ($measured -gt 0) { $sizeKB = $measured }
+    }
     New-Item -Path $key -Force | Out-Null
     New-ItemProperty -Path $key -Name DisplayName      -Value 'think-cell'                                 -PropertyType String -Force | Out-Null
     New-ItemProperty -Path $key -Name DisplayVersion   -Value $script:appDisplayVersion                    -PropertyType String -Force | Out-Null
@@ -115,7 +137,7 @@ function Set-ThinkCellArpEntry {
     New-ItemProperty -Path $key -Name ModifyPath       -Value "MsiExec.exe /X$script:appProductCode"       -PropertyType String -Force | Out-Null
     New-ItemProperty -Path $key -Name URLInfoAbout     -Value 'https://www.think-cell.com'                 -PropertyType String -Force | Out-Null
     New-ItemProperty -Path $key -Name Contact          -Value 'support@think-cell.com'                     -PropertyType String -Force | Out-Null
-    New-ItemProperty -Path $key -Name EstimatedSize    -Value 410786                                        -PropertyType DWord  -Force | Out-Null
+    New-ItemProperty -Path $key -Name EstimatedSize    -Value $sizeKB                                        -PropertyType DWord  -Force | Out-Null
     New-ItemProperty -Path $key -Name WindowsInstaller -Value 1                                             -PropertyType DWord  -Force | Out-Null
     New-ItemProperty -Path $key -Name NoModify         -Value 1                                             -PropertyType DWord  -Force | Out-Null
     New-ItemProperty -Path $key -Name NoRepair         -Value 1                                             -PropertyType DWord  -Force | Out-Null

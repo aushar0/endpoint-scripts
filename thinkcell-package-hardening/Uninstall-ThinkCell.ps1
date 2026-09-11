@@ -6,6 +6,12 @@
     is installed (exits 0).
 
 .DESCRIPTION
+    v2 (Sep 11 2026): ensures the log directory exists (C:\Windows\Logs\Software
+    is NOT present on clean Windows - PSADT normally creates it, a standalone
+    run would fail msiexec /l*v), takes -LogPath for testability, and retries
+    once with a 30s backoff on msiexec 1618 (another installation in progress -
+    the classic fleet transient when running without an orchestrator to retry).
+
     Why this exists: the think-cell MSI is 32-bit, so its ARP entry lives in
     HKLM\SOFTWARE\WOW6432Node\...\Uninstall (not the native hive), and PSADT
     Remove-MSIApplications can find nothing on machines where that key is
@@ -23,7 +29,8 @@
     profile. Default leaves them (README checklist #7: sweep vs leave).
 #>
 param(
-    [switch]$CleanUserData
+    [switch]$CleanUserData,
+    [string]$LogPath = 'C:\Windows\Logs\Software\thinkcell_uninstall.log'
 )
 
 # UpgradeCode from the MSI Property table (verified setup 38764 / 14.0.38.764;
@@ -31,10 +38,23 @@ param(
 $upgradeCode  = '{E202304D-BA30-4EDA-9905-7459004CFFD1}'
 # Explicit fallback for the 38764 release in case COM enumeration fails.
 $knownCodes   = @('{569E51D7-73C3-435C-8A04-ABE3FA38DCC2}')
-$logPath      = 'C:\Windows\Logs\Software\thinkcell_uninstall.log'
 
 $ErrorActionPreference = 'Continue'
 $exitOk = @{ 0 = 'OK'; 1605 = 'not installed (treated as OK)'; 3010 = 'OK, reboot required'; 1641 = 'OK, reboot initiated' }
+
+# msiexec /l*v fails on a missing log directory - create it (PSADT normally does).
+if ($LogPath) { New-Item -ItemType Directory -Path (Split-Path -Parent $LogPath) -Force | Out-Null }
+
+function Invoke-MsiexecX ([string]$ProductCode) {
+    $args_ = "/x $ProductCode /qn /norestart /l*v `"$LogPath`""
+    $p = Start-Process msiexec.exe -ArgumentList $args_ -Wait -PassThru -WindowStyle Hidden
+    if ($p.ExitCode -eq 1618) {
+        Write-Output '  msiexec returned 1618 (another installation in progress) - retrying once in 30s...'
+        Start-Sleep -Seconds 30
+        $p = Start-Process msiexec.exe -ArgumentList $args_ -Wait -PassThru -WindowStyle Hidden
+    }
+    return $p.ExitCode
+}
 
 # --- 1. collect installed product codes (normal GUID form, no registry keys) ---
 $codes = @()
@@ -55,11 +75,11 @@ if (-not ($codes | Where-Object { $_ })) {
 $failed = 0
 foreach ($code in ($codes | Where-Object { $_ })) {
     Write-Output "Uninstalling think-cell product $code ..."
-    $p = Start-Process msiexec.exe -ArgumentList "/x $code /qn /norestart /l*v `"$logPath`"" -Wait -PassThru -WindowStyle Hidden
-    if ($exitOk.ContainsKey($p.ExitCode)) {
-        Write-Output "  msiexec exit $($p.ExitCode) = $($exitOk[$p.ExitCode])"
+    $ec = Invoke-MsiexecX $code
+    if ($exitOk.ContainsKey($ec)) {
+        Write-Output "  msiexec exit $ec = $($exitOk[$ec])"
     } else {
-        Write-Output "  msiexec exit $($p.ExitCode) = FAILED (see $logPath)"
+        Write-Output "  msiexec exit $ec = FAILED (see $LogPath)"
         $failed = 1
     }
 }
@@ -73,8 +93,8 @@ $leftovers = Get-ItemProperty @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion
 foreach ($lo in $leftovers) {
     $pc = $lo.PSChildName
     Write-Output "Leftover entry '$($lo.DisplayName)' $pc - uninstalling by its ProductCode..."
-    $p = Start-Process msiexec.exe -ArgumentList "/x $pc /qn /norestart /l*v `"$logPath`"" -Wait -PassThru -WindowStyle Hidden
-    if (-not $exitOk.ContainsKey($p.ExitCode)) { Write-Output "  msiexec exit $($p.ExitCode) = FAILED"; $failed = 1 }
+    $ec = Invoke-MsiexecX $pc
+    if (-not $exitOk.ContainsKey($ec)) { Write-Output "  msiexec exit $ec = FAILED"; $failed = 1 }
 }
 
 # --- 4. verify ---
@@ -85,7 +105,7 @@ foreach ($root in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
 }
 if (Test-Path 'C:\Program Files (x86)\think-cell') { $residue += 'C:\Program Files (x86)\think-cell' }
 if ($residue) {
-    Write-Output "RESIDUE after uninstall:"
+    Write-Output 'RESIDUE after uninstall:'
     $residue | ForEach-Object { Write-Output "  $_" }
     $failed = 1
 } else {
