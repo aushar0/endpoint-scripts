@@ -50,6 +50,20 @@ a subset of Cloud PCs whose Entra objects carry no ZTDID stamp at all,
 walked through the differential with the tenant evidence that decides
 between the two remaining causes.*
 
+### [store-app-repair](store-app-repair/)
+
+Repair Store apps (Calculator, Snipping Tool, any free Store app) when
+*"This app can't open"* survives a correct winget uninstall/reinstall. The
+winget dance only replaces the app registration; the frameworks and user
+state it depends on are untouched. Three paste-ready blocks fix it as the
+affected user with no admin rights, plus a self-contained one-command
+repair script that fetches signed packages straight from Microsoft's own
+update channel at run time — no Store, no winget, nothing pre-staged.
+
+*Every command and script path in the kit README was executed and verified
+on a live machine before shipping, including the no-Store reproduction
+(hosts-blocked, winget dead, repair channel still working).*
+
 ## Conventions
 
 - One folder per kit; the kit's README is the front door.
