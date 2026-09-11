@@ -43,8 +43,12 @@ Two behaviors of the think-cell MSI surprise packaging teams:
   - `Set-ThinkCellArpEntry` — ARP-entry insurance called from Post-Install
     and Repair: if the entry is missing from both hives it re-creates the
     full WOW6432Node entry, so registry-based inventory stays truthful.
-    Idempotent, and deliberately single-location (a native-hive mirror would
-    duplicate the Apps & Features listing).
+    Idempotent, deliberately single-location (a native-hive mirror would
+    duplicate the Apps & Features listing), **guarded** (skips unless the
+    product is Installer-registered or binaries exist in the install dir —
+    no ghost entries), and **dual-surface logged** (narrative lines plus
+    `THINKCELL_ARP` key=value lines for post-mortem grep, all through PSADT
+    `Write-Log` only, so toolkit-configured log locations just work).
   - Post-Uninstall cleanup loop for an entry the MSI uninstall might orphan.
 - **`Invoke-ThinkCellPackageTest.ps1`** — one-shot elevated verification
   harness: extracts MSI properties, installs `/qn`, captures evidence

@@ -1,36 +1,37 @@
 <#
 .SYNOPSIS
     Paste-ready additions for a think-cell PSADT Deploy-Application.ps1:
-    MSI-derived ProductCode/version, ARP-entry insurance for Post-Install /
-    Repair, entry cleanup for Post-Uninstall.
+    MSI-derived ProductCode/version, guarded ARP-entry insurance for
+    Post-Install / Repair, entry cleanup for Post-Uninstall.
 
 .DESCRIPTION
-    v2 (Sep 11 2026): ProductCode and version are now DERIVED at runtime from
-    the single .msi in $dirFiles (ANY filename - rename-proof; validated by
-    the MSI's own ProductName metadata, and it throws loudly on zero/multiple
-    MSIs or a non-think-cell file) - version bumps become "swap the MSI file
-    in Files", no GUID lookups, no stale hard-coded codes (the checklist-#1
-    failure class). The MSI Property table is read via the Windows Installer
-    COM object (same reader Invoke-ThinkCellPackageTest.ps1 uses; read-only,
-    no elevation needed).
+    v3 (Sep 11 2026): added an install-presence guard (never fabricates an ARP
+    entry for a product that is not actually installed) and dual-surface
+    logging (narrative lines for humans + THINKCELL_ARP key=value lines for
+    grep/AI post-mortem). All logging goes through PSADT Write-Log ONLY, so it
+    lands in whatever per-app / per-installtype log location the toolkit is
+    configured for - nothing here hardcodes a log path.
+
+    v2: ProductCode and version DERIVED at runtime from the single .msi in
+    $dirFiles (ANY filename - rename-proof; validated against the MSI's own
+    ProductName metadata; throws loudly on zero/multiple MSIs or a
+    non-think-cell file). Version bumps = "swap the MSI in Files".
 
     Uninstall bonus: Execute-MSI -Action Uninstall accepts the MSI FILE PATH
-    and resolves the ProductCode itself, so no GUID is needed anywhere:
+    and resolves the ProductCode itself:
       Execute-MSI -Action Uninstall -Path $msiPath -ExitCodes 0,1605,3010,1641
-    (1605 = "not installed on this machine" - makes uninstall idempotent.)
 
     WHY the ARP insurance: the think-cell MSI is 32-bit, so Windows Installer
     publishes its Uninstall entry under HKLM\SOFTWARE\WOW6432Node (live-verified
     Sep 11 2026). If an install/repair completes without that entry (or anything
     later strips it), registry-based inventory and Apps & Features go blind.
-    Set-ThinkCellArpEntry re-creates it - idempotent, and deliberately writes
-    ONLY the WOW6432Node location (where the MSI itself publishes; a native-hive
-    mirror would duplicate the Apps & Features listing).
+    Set-ThinkCellArpEntry re-creates it - guarded, idempotent, deliberately
+    single-location (no native-hive mirror = no duplicate Apps listing).
 
     PASTE TARGETS in Deploy-Application.ps1:
-      1. Everything from "MSI-derived variables" down through the Set-ThinkCellArpEntry
-         function AFTER the template's `$dirFiles` definition (end of the
-         VARIABLE DECLARATION block - $dirFiles must exist first).
+      1. Everything from "MSI-derived variables" down through the
+         Set-ThinkCellArpEntry function AFTER the template's `$dirFiles`
+         definition (end of the VARIABLE DECLARATION block).
       2. Optionally set `$appVersion = $script:appDisplayVersion` right after
          the template's $appVersion line (stops the hand-bumped version string).
       3. Post-Install:  call  Set-ThinkCellArpEntry  after Execute-MSI.
@@ -38,9 +39,7 @@
       5. Post-Uninstall: the small cleanup loop (removes the entry if the
          MSI uninstall somehow left it behind).
 
-    DISCIPLINE: keep exactly ONE .msi in Files (any filename) - the
-    discovery block throws otherwise (deliberately loud, so a stale MSI can
-    never silently win).
+    DISCIPLINE: keep exactly ONE .msi in Files (any filename).
 #>
 
 # --- 1. MSI-derived variables (runs inside Deploy-Application.ps1) ---
@@ -66,15 +65,46 @@ $msiProductName = Get-MsiProperty -MsiPath $script:msiPath -Property 'ProductNam
 if ($msiProductName -ne 'think-cell') { throw "The MSI in Files is '$msiProductName', not 'think-cell' - wrong file in the package." }
 # $appVersion = $script:appDisplayVersion   # <- optional: stop hand-bumping the version string
 
-# --- 2. ARP-entry insurance function ---
+# --- 2. Guarded, logged ARP-entry insurance function ---
 function Set-ThinkCellArpEntry {
     $arpPaths = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$script:appProductCode",
                   "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$script:appProductCode")
-    if (Get-ItemProperty -Path $arpPaths -ErrorAction SilentlyContinue) {
-        Write-Log -Message 'think-cell ARP entry already present - no action.'
+
+    Write-Log -Message ("think-cell ARP check started: ProductCode={0} Version={1}" -f $script:appProductCode, $script:appDisplayVersion)
+
+    # GUARD 1 - product registered with Windows Installer (strongest signal)?
+    $registered = $false
+    try {
+        $inst = New-Object -ComObject WindowsInstaller.Installer
+        foreach ($c in $inst.RelatedProducts('{E202304D-BA30-4EDA-9905-7459004CFFD1}')) {
+            if ("$c" -eq $script:appProductCode) { $registered = $true }
+        }
+    } catch {
+        Write-Log -Message ("think-cell ARP check: Installer registration query failed ({0}) - falling back to file check." -f $_.Exception.Message)
+    }
+
+    # GUARD 2 - install dir actually contains binaries?
+    $installDir  = "${env:ProgramFiles(x86)}\think-cell"
+    $hasBinaries = (Test-Path $installDir) -and [bool](Get-ChildItem -Path $installDir -Include '*.dll','*.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)
+
+    if (-not $registered -and -not $hasBinaries) {
+        Write-Log -Message 'think-cell ARP: product NOT detected as installed (no Installer registration, no binaries in install dir) - skipping. No entry fabricated for an absent product.'
+        Write-Log -Message 'THINKCELL_ARP action=skip reason=product-not-installed'
         return
     }
-    $key = $arpPaths[1]  # WOW6432Node: where the 32-bit MSI itself publishes
+    Write-Log -Message ("think-cell ARP: product present (InstallerRegistered={0} BinariesFound={1})." -f $registered, $hasBinaries)
+
+    # Already published in either hive?
+    $existing = Get-ItemProperty -Path $arpPaths -ErrorAction SilentlyContinue
+    if ($existing) {
+        $where = ($arpPaths | Where-Object { Test-Path $_ } | Select-Object -First 1)
+        Write-Log -Message "think-cell ARP: entry already present at $where - no action."
+        Write-Log -Message "THINKCELL_ARP action=noop entry=present location=$where"
+        return
+    }
+
+    # Recreate - WOW6432Node, where the 32-bit MSI itself publishes.
+    $key = $arpPaths[1]
     New-Item -Path $key -Force | Out-Null
     New-ItemProperty -Path $key -Name DisplayName      -Value 'think-cell'                                 -PropertyType String -Force | Out-Null
     New-ItemProperty -Path $key -Name DisplayVersion   -Value $script:appDisplayVersion                    -PropertyType String -Force | Out-Null
@@ -91,7 +121,8 @@ function Set-ThinkCellArpEntry {
     New-ItemProperty -Path $key -Name NoRepair         -Value 1                                             -PropertyType DWord  -Force | Out-Null
     New-ItemProperty -Path $key -Name VersionMajor     -Value ([int]$script:appDisplayVersion.Split('.')[0]) -PropertyType DWord -Force | Out-Null
     New-ItemProperty -Path $key -Name VersionMinor     -Value ([int]$script:appDisplayVersion.Split('.')[1]) -PropertyType DWord -Force | Out-Null
-    Write-Log -Message "Re-created missing think-cell ARP registry entry (WOW6432Node) for $script:appProductCode v$script:appDisplayVersion."
+    Write-Log -Message "think-cell ARP: entry was MISSING - re-created at $key (WOW6432Node, where the 32-bit MSI publishes)."
+    Write-Log -Message ("THINKCELL_ARP action=recreate hive=WOW6432Node productcode={0} version={1} registered={2} binaries={3} installdate={4}" -f $script:appProductCode, $script:appDisplayVersion, $registered, $hasBinaries, (Get-Date -Format yyyyMMdd))
 }
 
 # --- 3/4. Post-Install AND Repair-Title: after the MSI action ---
@@ -101,6 +132,10 @@ function Set-ThinkCellArpEntry {
 <#
 foreach ($p in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$appProductCode",
                  "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$appProductCode")) {
-    if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+    if (Test-Path $p) {
+        Remove-Item $p -Recurse -Force
+        Write-Log -Message "think-cell ARP: removed orphaned entry at $p after uninstall."
+        Write-Log -Message "THINKCELL_ARP action=remove-orphaned location=$p"
+    }
 }
 #>
