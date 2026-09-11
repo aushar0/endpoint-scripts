@@ -17,6 +17,11 @@
       3. Compound rule clause (ZTDID present but an extra condition fails)
       4. Dynamic-group processing lag (resolves within about a day)
 
+    It also prints provisioning-date ranges for the in-group and missing
+    cohorts and flags a clean before/after boundary - the signature of a
+    change event (provisioning policy created/edited, or Autopilot device
+    preparation adoption) rather than an old standing gap.
+
     Read-only: makes no changes to any object. Tested status: parse-checked
     on Windows PowerShell 5.1 and logic-tested end-to-end against mocked
     Graph responses; live-tenant execution pending - review the output
@@ -90,7 +95,7 @@ Write-Host "Direct members (device objects): $($memberIds.Count)"
 
 # --- All devices; isolate Cloud PCs per the documented model recipe
 $devices = Invoke-MgGraphRequest -Method GET -All -Uri `
-    "https://graph.microsoft.com/v1.0/devices?`$select=id,displayName,model,trustType,enrollmentProfileName,physicalIds"
+    "https://graph.microsoft.com/v1.0/devices?`$select=id,displayName,model,trustType,enrollmentProfileName,physicalIds,createdDateTime"
 
 $cloudPcs = @($devices | Where-Object {
         ($_.model -and $_.model.StartsWith('Cloud PC', [System.StringComparison]::OrdinalIgnoreCase)) -or
@@ -120,6 +125,7 @@ $rows = foreach ($d in $cloudPcs) {
         Model             = $d.model
         JoinType          = $d.trustType
         EnrollmentProfile = $d.enrollmentProfileName
+        Created           = $d.createdDateTime
         HasZtdid          = $hasZtdid
         InGroup           = $memberIds.Contains($d.id)
     }
@@ -153,13 +159,35 @@ if ($clusterWithZtdid.Count -gt 0) {
     Write-Host "  re-read the membership rule above for an 'and' clause these devices fail."
 }
 
+# --- Cohort dating: did membership split cleanly at a point in time?
+$presentDates = @($present | Where-Object { $_.Created } | ForEach-Object { [datetime]$_.Created })
+$missingDates = @($missing | Where-Object { $_.Created } | ForEach-Object { [datetime]$_.Created })
+Write-Host ""
+Write-Host "==================== COHORT TIMING ====================" -ForegroundColor Cyan
+if ($presentDates.Count -gt 0) {
+    Write-Host ("In-group Cloud PCs provisioned: {0:yyyy-MM-dd} to {1:yyyy-MM-dd}" -f ($presentDates | Measure-Object -Minimum -Maximum).Minimum, ($presentDates | Measure-Object -Minimum -Maximum).Maximum)
+}
+if ($missingDates.Count -gt 0) {
+    Write-Host ("Missing Cloud PCs provisioned:  {0:yyyy-MM-dd} to {1:yyyy-MM-dd}" -f ($missingDates | Measure-Object -Minimum -Maximum).Minimum, ($missingDates | Measure-Object -Minimum -Maximum).Maximum)
+    $maxPresent = ($presentDates | Measure-Object -Maximum).Maximum
+    $minMissing = ($missingDates | Measure-Object -Minimum).Minimum
+    if ($presentDates.Count -gt 0 -and $maxPresent -lt $minMissing) {
+        Write-Host ""
+        Write-Host ("CLEAN TEMPORARY BOUNDARY: every in-group Cloud PC predates {0:yyyy-MM-dd}, every missing one postdates it." -f $minMissing) -ForegroundColor Yellow
+        Write-Host "  Points at a change event (provisioning policy created/edited, or device-preparation adoption)."
+        Write-Host "  Check Intune audit logs for provisioning-policy changes around that date."
+    } else {
+        Write-Host "  No clean date boundary; the split follows another attribute (profile, join type) rather than time."
+    }
+}
+
 # --- Detail table of everything missing
 if ($missing.Count -gt 0) {
     Write-Host ""
     Write-Host "==================== MISSING DETAIL ====================" -ForegroundColor Cyan
     $missing |
         Sort-Object @{ Expression = 'HasZtdid'; Descending = $true }, DisplayName |
-        Format-Table DisplayName, JoinType, EnrollmentProfile, HasZtdid, @{ Label = 'InGroup'; Expression = { $_.InGroup } } -AutoSize |
+        Format-Table DisplayName, JoinType, EnrollmentProfile, Created, HasZtdid, @{ Label = 'InGroup'; Expression = { $_.InGroup } } -AutoSize |
         Out-String -Width 220 | Write-Host
 }
 

@@ -45,6 +45,11 @@ device preparation) has nothing for the rule to match. Ranks the four
 causes with the evidence that decides between them, and includes a Graph
 audit script that reports the deciding attribute for every missing device.
 
+*Start with the [case study](cloudpc-autopilot-group-audit/CASE-STUDY.md):
+a subset of Cloud PCs whose Entra objects carry no ZTDID stamp at all,
+walked through the differential with the tenant evidence that decides
+between the two remaining causes.*
+
 ## Conventions
 
 - One folder per kit; the kit's README is the front door.

@@ -27,7 +27,8 @@ Throughout, ZTDID and `[ZTDId]` refer to the same thing: the
 | File | Purpose |
 |---|---|
 | `README.md` | This report: analysis, verification, remediation |
-| `Find-CloudPcAutopilotGroupGaps.ps1` | Graph audit: diffs every Cloud PC against a named group and reports the attributes that narrow each missing device to a ranked cause |
+| `CASE-STUDY.md` | The live incident that produced this kit, walked through the differential with findings and open slots marked |
+| `Find-CloudPcAutopilotGroupGaps.ps1` | Graph audit: diffs every Cloud PC against a named group, reports the attributes that narrow each missing device to a ranked cause, and dates both cohorts to detect a change-event boundary |
 
 ## Symptom
 
@@ -102,6 +103,46 @@ symptom is devices missing for a week or more, this cause is already ruled
 out for the standing gap; the audit keeps it for completeness.
 *Deciding evidence:* `[ZTDId]:` present, membership appears on its own.
 
+## "It was working before": did something change?
+
+That question has two possible answers, and existing group membership
+usually already decides between them:
+
+**World 1: it never worked for those devices.** The older Cloud PCs have
+the stamp, the newer ones never did, and the gap only became visible when
+someone looked at a device that was missing. Nothing in the tenant
+changed; the cohort did. This is the most common outcome.
+
+**World 2: a change at a point in time.** Devices provisioned before date
+X carry `[ZTDId]`, everything after X does not. The prime suspect for 2026
+is documented: Windows 365 gained the ability to link Autopilot device
+preparation to provisioning policies (rolled out through 2025-2026), and
+a provisioning policy created or edited to use that path enrolls Cloud
+PCs by a different mechanism on purpose. Adoption can be as quiet as one
+new policy for a new image or region. (Timing inference, not a documented
+incident; the checks below confirm or kill it.)
+
+Three checks, in order of speed:
+
+1. **Date the two cohorts.** Add `createdDateTime` to the device query
+   (the audit script does this and prints the cohort ranges, detecting a
+   clean before/after boundary automatically). Missing devices clustered
+   after a date = World 2, and that date is the change window. A split
+   that follows `enrollmentProfileName` instead of dates = World 1.
+2. **Intune audit logs.** Tenant administration > Audit logs, filter on
+   provisioning policy events around the boundary date. No entries means
+   nobody in the tenant changed anything, which strengthens the ADP
+   adoption path or an older, never-noticed gap.
+3. **Read each provisioning policy's Configuration tab.** Any policy
+   with an Autopilot device preparation policy selected is the answer for
+   its devices; `enrollmentProfileName` maps each Cloud PC to the policy
+   that provisioned it.
+
+If the answer is World 2 via device preparation, the framing for the team
+is straightforward: Microsoft shipped a new enrollment path, the tenant
+adopted it, and the ZTDID rule only ever matched the old path. The fix is
+remediation A or B below, not a rollback.
+
 ## Verify in your tenant
 
 ### Manual (one Graph call, run once per device)
@@ -145,6 +186,7 @@ Decision table for the summary output:
 | ZTDID absent, profile names a device-preparation policy | Cause 2 |
 | ZTDID absent, `ServerAd` | Cause 1 (hybrid path) |
 | ZTDID absent, correlates with older provision dates | Cause 1 (pre-change cohort) |
+| Cohorts split cleanly at a date boundary | Change event: check audit logs and provisioning-policy Configuration tabs around that date (cause 1 post-change or cause 2) |
 
 ## Remediation options
 
