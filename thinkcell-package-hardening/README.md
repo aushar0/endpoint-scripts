@@ -94,6 +94,12 @@ repair deployment.
 
 ## Notes
 
+- **Office-open handling:** `Show-InstallationWelcome -CloseApps 'powerpnt,excel' -CloseAppsCountdown 3600`
+  at the top of the Install, Uninstall, and Repair sections. The prompt only
+  appears when those apps are actually running (silent otherwise), the MSI
+  stays `/qn`, and the countdown lets required deployments complete on
+  unattended machines. Keep the MSI's `SHUTDOWNPPT`/`SHUTDOWNXL` at their 0
+  default so PSADT's prompt is the single closing mechanism.
 - think-cell rotates its **ProductCode every release** but keeps a stable
   UpgradeCode — everything in this kit anchors on the stable side (UpgradeCode
   or runtime derivation), so nothing here needs bumping on a version swap.
