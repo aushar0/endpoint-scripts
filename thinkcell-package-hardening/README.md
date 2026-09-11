@@ -112,6 +112,26 @@ log carries `context="NT AUTHORITY\SYSTEM"`, session-0 detection flipped the
 run to NonInteractive exactly as under SCCM, and an Interactive-mode run
 confirmed `/QN` on its msiexec line (no MSI window in any deploy mode).
 
+**Post-mortem logging** (designed for handing the PSADT log to a human or an
+AI as proof of what happened on the machine):
+
+- Proper **phase prefixes** on every line — `[Pre-Installation]`,
+  `[Installation]`, `[Post-Installation]`, same for Repair/Uninstallation —
+  via the template's `$installPhase` convention (a compact script that omits
+  them logs everything as `[Execution]`, which is what this kit originally
+  did wrong).
+- **`THINKCELL_SUMMARY`** — one greppable digest line per section:
+  `deploymenttype= mode= phase= user= computer= productcode= version=
+  licensekey=present|absent arp=present|absent result=success|failed-<code>`.
+  The license key VALUE is never logged — presence only.
+- **`THINKCELL_ARP`** decision lines (`action=recreate/noop/skip/
+  remove-orphaned` with reasons) and **`THINKCELL_PERUSER
+  localappdata_thinkcell_profiles=N`** census on uninstall (flags per-user
+  shadow installs).
+- Execute-MSI logs the full msiexec command line (proof of `/QN` and the
+  fleet properties reaching the installer) and writes the MSI verbose log
+  beside the PSADT log in the toolkit-configured folder.
+
 ## Evidence
 
 All three pieces live-tested (Sep 2026, think-cell 14.0.38.764 / build 38764):

@@ -198,6 +198,18 @@ Try {
         Write-Log -Message "think-cell ARP: entry was MISSING - re-created at [$key] (WOW6432Node, where the 32-bit MSI publishes)."
         Write-Log -Message ("THINKCELL_ARP action=recreate hive=WOW6432Node productcode={0} version={1} registered={2} binaries={3} installdate={4}" -f $script:appProductCode, $script:appDisplayVersion, $registered, $hasBinaries, (Get-Date -Format yyyyMMdd))
     }
+
+    ## Post-mortem digest: one greppable line per section for humans and AI.
+    ## Never includes the license key value - presence only.
+    function Write-ThinkCellSummary ([string]$Result) {
+        $wowKey = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$script:appProductCode"
+        Write-Log -Message ("THINKCELL_SUMMARY deploymenttype={0} mode={1} phase={2} user={3} computer={4} productcode={5} version={6} licensekey={7} arp={8} result={9}" -f `
+            $DeploymentType, $DeployMode, $script:installPhase, $env:USERNAME, $env:COMPUTERNAME,
+            $script:appProductCode, $script:appDisplayVersion,
+            $(if ([string]::IsNullOrWhiteSpace($licenseKey)) { 'absent' } else { 'present' }),
+            $(if (Test-Path $wowKey) { 'present' } else { 'absent' }),
+            $Result)
+    }
 }
 Catch {
     [int32]$mainExitCode = 60001
@@ -208,46 +220,58 @@ Catch {
 ##*===============================================
 ##* INSTALLATION
 If ($DeploymentType -ieq 'Install') {
+    [string]$installPhase = 'Pre-Installation'
     ## Prompt only appears if PowerPoint/Excel are actually running; silent mode force-closes after countdown.
     Show-InstallationWelcome -CloseApps 'powerpnt,excel' -CloseAppsCountdown 3600
 
+    [string]$installPhase = 'Installation'
     Try {
-        Write-Log -Message "Starting installation of [$appVendor $appName $appVersion] via [$script:msiPath] with params [$msiExtraParams]..."
+        Write-Log -Message "Starting installation of [$appVendor $appName $appVersion] via [$script:msiPath] with params [$msiExecParams]..."
         Execute-MSI -Action Install -Path $script:msiPath -Parameters $msiExecParams
 
+        [string]$installPhase = 'Post-Installation'
         Set-ThinkCellArpEntry
 
+        Write-ThinkCellSummary 'success'
         Write-Log -Message "Installation of [$appName $appVersion] complete."
     }
     Catch {
         [int32]$mainExitCode = 60002
+        Write-ThinkCellSummary "failed-$mainExitCode"
         Write-Log -Message "Installation of [$appName] failed with error code $mainExitCode.`n$(Resolve-Error)"
     }
 }
 ##*===============================================
 ##* REPAIR
 ElseIf ($DeploymentType -ieq 'Repair') {
+    [string]$installPhase = 'Pre-Repair'
     Show-InstallationWelcome -CloseApps 'powerpnt,excel' -CloseAppsCountdown 3600
 
+    [string]$installPhase = 'Repair'
     Try {
         Write-Log -Message "Starting repair of [$appName $appVersion] via [$script:msiPath]..."
         Execute-MSI -Action Repair -Path $script:msiPath -Parameters $msiExecParams
 
+        [string]$installPhase = 'Post-Repair'
         ## Repair also restores ARP visibility if the entry was stripped (verified live).
         Set-ThinkCellArpEntry
 
+        Write-ThinkCellSummary 'success'
         Write-Log -Message "Repair of [$appName $appVersion] complete."
     }
     Catch {
         [int32]$mainExitCode = 60003
+        Write-ThinkCellSummary "failed-$mainExitCode"
         Write-Log -Message "Repair of [$appName] failed with error code $mainExitCode.`n$(Resolve-Error)"
     }
 }
 ##*===============================================
 ##* UNINSTALLATION
 ElseIf ($DeploymentType -ieq 'Uninstall') {
+    [string]$installPhase = 'Pre-Uninstallation'
     Show-InstallationWelcome -CloseApps 'powerpnt,excel' -CloseAppsCountdown 3600
 
+    [string]$installPhase = 'Uninstallation'
     Try {
         Write-Log -Message "Starting uninstall of [$appName $appVersion]..."
         ## Explicit MSI path (not a GUID). 3.10.1 has no -ExitCodes on Execute-MSI;
@@ -255,6 +279,7 @@ ElseIf ($DeploymentType -ieq 'Uninstall') {
         ## 3010/1641 (reboot required/deferred) are already treated as success by the toolkit.
         Execute-MSI -Action Uninstall -Path $script:msiPath -IgnoreExitCodes '1605'
 
+        [string]$installPhase = 'Post-Uninstallation'
         ## Remove the ARP entry if the uninstall left it behind
         Foreach ($p in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$script:appProductCode",
                          "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$script:appProductCode")) {
@@ -265,13 +290,18 @@ ElseIf ($DeploymentType -ieq 'Uninstall') {
             }
         }
 
-        ## Per-user leftovers (%APPDATA%/%LOCALAPPDATA%\think-cell) are expected - left in place by default.
-        Write-Log -Message "Uninstall of [$appName $appVersion] complete. Per-user data dirs (if any) intentionally left."
+        ## Per-user leftovers: log what exists (troubleshooting per-user shadows), leave in place by default.
+        $perUserDirs = @(Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'AppData\Local\think-cell') })
+        Write-Log -Message ("THINKCELL_PERUSER localappdata_thinkcell_profiles={0} left_in_place=1" -f $perUserDirs.Count)
+
+        Write-ThinkCellSummary 'success'
+        Write-Log -Message "Uninstall of [$appName $appVersion] complete."
 
         Exit-Script -ExitCode $mainExitCode
     }
     Catch {
         [int32]$mainExitCode = 60004
+        Write-ThinkCellSummary "failed-$mainExitCode"
         Write-Log -Message "Uninstall of [$appName] failed with error code $mainExitCode.`n$(Resolve-Error)"
     }
 }
