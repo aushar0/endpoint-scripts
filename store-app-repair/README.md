@@ -1,10 +1,13 @@
 # store-app-repair
 
+**Purpose:** restore Store-app functionality on any Windows machine - no Store
+access, no winget, no admin rights, and no pre-packaged files required.
+
 Repair Windows Store apps (Calculator, Snipping Tool, and any free Store app) when
-the app won't open or is missing and the standard fixes have already failed.
-Built for the case where a user reports *"This app can't open - check the Store for
-more info"*, help desk already ran the correct `winget uninstall` / `winget install
--s msstore` dance, and the error persists.
+the app won't open or is missing and the standard fixes have already failed. The
+typical case: *"This app can't open - check the Store for more info"*, the
+standard `winget uninstall` / `winget install -s msstore` cycle has already run,
+and the error persists.
 
 ## Why the winget reinstall didn't fix it
 
@@ -139,7 +142,7 @@ Behavior details that matter in the field:
 - **Output contract.** Clipped narrative lines (`[INFO]/[WARN]/[ERR]`):
   reachability checks, per-app status ("Calculator healthy: version ...
   registered, all required components present"), each action taken, and a
-  one-line `SUMMARY:` for the ticket. A full timestamped log lands in
+  one-line `SUMMARY:` for the case record. A full timestamped log lands in
   `%TEMP%\MsStoreRepair\<stamp>_<user>_<mode>.log`. Spell words out; no
   shorthand.
 - **Idempotent.** App registered at any version = "nothing to do", exit 0.

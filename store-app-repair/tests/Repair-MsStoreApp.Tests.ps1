@@ -3,8 +3,8 @@
 # Scope: static contract + healthy-box behavior. Break/fix cycles stay manual
 # (they remove apps) - see kit README verification ledger.
 
-$script:gen   = 'C:\Users\akh07\OneDrive\Documents\zCode\msstore_links\New-MsStoreRepairScript.ps1'
-$script:tool  = 'C:\Users\akh07\OneDrive\Documents\zCode\msstore_links\dist\Repair-MsStoreApp.ps1'
+# Paths resolve relative to this file so the suite runs on any clone.
+$script:tool  = Join-Path $PSScriptRoot '..\Repair-MsStoreApp.ps1'
 $script:raw   = Get-Content $script:tool -Raw
 
 Describe 'Generated script - static contract' {
@@ -55,15 +55,6 @@ Describe 'Generated script - static contract' {
 
     It 'declares exit codes 0/1/2/3/4 in help' {
         $script:raw | Should Match 'Exit codes'
-    }
-}
-
-Describe 'Generator' {
-
-    It 'is deterministic (same input, same SHA-256)' {
-        $h1 = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script:gen 2>$null | Select-String 'sha256').ToString()
-        $h2 = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script:gen 2>$null | Select-String 'sha256').ToString()
-        $h1 | Should Be $h2
     }
 }
 
