@@ -183,6 +183,38 @@ found. The repair script's channel is independent of the Store endpoints.
 | App missing after uninstall/PC reset | Staged, unregistered | Repair script (elevated = zero download) |
 | Machine-wide AppX repository corruption | Deep OS damage | Escalation floor: in-place repair upgrade / reimage |
 
+## Revert
+
+Everything this kit changes is app-registration state plus temp files - no
+services, settings, or system files. Capture the before-state first, then use
+the undo table.
+
+**Before-state capture** (run before any repair; standard user for the first
+block, elevated only if the provision path may run):
+
+```powershell
+Get-AppxPackage -Name Microsoft.WindowsCalculator, Microsoft.ScreenSketch |
+  Select-Object Name, Version, Status | Out-File "$env:TEMP\storeapp-before.txt"
+Get-AppxProvisionedPackage -Online 2>$null |
+  Where-Object DisplayName -match 'WindowsCalculator|ScreenSketch' |
+  Select-Object DisplayName, Version | Out-File "$env:TEMP\storeapp-provisioned-before.txt"
+```
+
+**Per-change undo:**
+
+| What a repair changed | How to undo |
+|---|---|
+| App installed / re-registered per-user | `Get-AppxPackage -Name <Name> \| Remove-AppxPackage` |
+| App provisioned machine-wide (SYSTEM runs) | `Get-AppxProvisionedPackage -Online \| Where-Object DisplayName -match '<App>' \| Remove-AppxProvisionedPackage -Online` (elevated), then the per-user removal above |
+| Dependency frameworks installed | **Leave them.** Frameworks are shared components; the OS refuses removal while any registered app depends on them (0x80073CF3, verified). They are inert when unused and Windows manages their lifecycle. |
+| Step 3 `Reset-AppxPackage` (user state) | Restore the container backup taken beforehand (`Copy-Item "$env:TEMP\calc-state-backup\*" "$env:LOCALAPPDATA\Packages\Microsoft.WindowsCalculator_8wekyb3d8bbwe\" -Recurse -Force`) |
+| Working files and logs | `%TEMP%\MsStoreRepair\` - delete freely |
+
+Removing both apps returns the machine to the pre-kit state *minus* whatever
+version the Store pushed meanwhile - re-running the original winget install
+(or the Store) restores the current public version. There is no downgrade
+path: the OS refuses version downgrades by design (0x80073D06).
+
 ## Verification status (2026-09-11, Windows 11 26200)
 
 Live-tested end to end on a daily-driver box: full remove -> repair cycles for
