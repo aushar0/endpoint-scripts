@@ -31,8 +31,14 @@ Two behaviors of the think-cell MSI surprise packaging teams:
   treated as success, so it's safe on machines that never got the app.
   Catches leftover ARP entries from releases with other ProductCodes,
   verifies both hives + the install dir afterwards, and optionally sweeps
-  per-user data (`-CleanUserData`). Runs elevated; logging to
-  `C:\Windows\Logs\Software\thinkcell_uninstall.log`.
+  per-user data (`-CleanUserData`). Runs elevated. Log path resolution:
+  explicit `-LogPath` wins; otherwise the PSADT toolkit's configured log
+  folder (`configToolkitLogPath`) is picked up from scope when running
+  inside a package — fleets that customize the PSADT log location get this
+  log in their folder, where their log collection looks; stock
+  `C:\Windows\Logs\Software` default only when standalone (and the
+  directory is created if missing — it does not exist on clean Windows).
+  Retries once after 30s on msiexec 1618 (installation-in-progress).
 - **`Deploy-Application-additions.ps1`** — paste-ready block for the
   package's `Deploy-Application.ps1`:
   - ProductCode and ProductVersion are **derived at runtime from the single

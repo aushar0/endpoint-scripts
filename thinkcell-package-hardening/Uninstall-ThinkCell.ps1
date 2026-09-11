@@ -6,6 +6,15 @@
     is installed (exits 0).
 
 .DESCRIPTION
+    v3 (Sep 11 2026): log path now RESOLVES to the PSADT toolkit's configured
+    log folder when the script runs inside a package ($configToolkitLogPath /
+    $logPath picked up from scope - fleets that customize the PSADT log
+    location get this log in THEIR folder, where their log collection looks).
+    Explicit -LogPath still wins; the PSADT default C:\Windows\Logs\Software
+    is only the standalone fallback. When launching this script as a separate
+    process FROM a package, pass the path explicitly:
+      Uninstall-ThinkCell.ps1 -LogPath (Join-Path $configToolkitLogPath 'thinkcell_uninstall.log')
+
     v2 (Sep 11 2026): ensures the log directory exists (C:\Windows\Logs\Software
     is NOT present on clean Windows - PSADT normally creates it, a standalone
     run would fail msiexec /l*v), takes -LogPath for testability, and retries
@@ -30,8 +39,28 @@
 #>
 param(
     [switch]$CleanUserData,
-    [string]$LogPath = 'C:\Windows\Logs\Software\thinkcell_uninstall.log'
+    [string]$LogPath = ''   # empty = auto-resolve: PSADT configured folder if in scope, else the PSADT default
 )
+
+# Resolve the log path: explicit -LogPath > PSADT's configured log folder (when
+# running inside a package, so customized log locations "just work") > default.
+# NOTE: only configToolkitLogPath is consulted - deliberately NOT $logPath,
+# because PS variables are case-insensitive and this script's -LogPath param
+# would collide with (and clobber) PSADT's $logPath if dot-sourced into a
+# package. Run as a separate process and pass -LogPath explicitly instead.
+function Resolve-ThinkCellLogPath ([string]$Requested) {
+    if ($Requested) { return $Requested }
+    foreach ($name in 'configToolkitLogPath') {
+        $v = Get-Variable -Name $name -Scope Script -ErrorAction SilentlyContinue
+        if (-not $v) { $v = Get-Variable -Name $name -ErrorAction SilentlyContinue }
+        if ($v -and $v.Value) {
+            return (Join-Path "$($v.Value)" 'thinkcell_uninstall.log')
+        }
+    }
+    return 'C:\Windows\Logs\Software\thinkcell_uninstall.log'
+}
+$LogPath = Resolve-ThinkCellLogPath $LogPath
+Write-Output "think-cell uninstaller logging to: $LogPath"
 
 # UpgradeCode from the MSI Property table (verified setup 38764 / 14.0.38.764;
 # think-cell keeps it stable across releases - it is how their upgrades chain).
