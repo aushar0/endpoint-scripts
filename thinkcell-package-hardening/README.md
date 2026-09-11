@@ -89,8 +89,10 @@ insurance in Install/Repair, orphan cleanup in Uninstall,
 
 - `Execute-MSI -Parameters` **replaces** the config's mode switches — including
   `/QN`. Passing custom MSI properties via `-Parameters` makes the MSI run
-  **full UI even in Silent mode**. Custom properties go through
-  `-AddParameters` (appends to the mode-appropriate defaults).
+  **full UI even in Silent mode**. `-AddParameters` appends instead — but it
+  is only right when you accept the config's per-mode UI defaults (see the
+  `/QB-!` trap below); to guarantee no MSI window in any mode, pass the
+  complete set via `-Parameters` including `/QN`.
 - The stock config's **Interactive default is `/QB-!` — a visible basic MSI
   window** on the user's desktop. This package forces `/QN` in EVERY mode via
   a deliberate full `-Parameters` replacement

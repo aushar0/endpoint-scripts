@@ -29,9 +29,16 @@
       - Execute-MSI has NO -ExitCodes parameter (that's Execute-Process); the
         3.10.1 way to tolerate 1605 "not installed" is -IgnoreExitCodes '1605'.
         3010/1641 are already success-with-reboot by default.
-      - -Parameters REPLACES the config's mode switches (incl. /QN) - custom
-        MSI properties must go through -AddParameters or the MSI runs with
-        full UI even in Silent mode.
+      - -Parameters REPLACES the config's mode switches; -AddParameters
+        appends to them. Replacement is what bit us once (custom props via
+        -Parameters silently dropped /QN -> full MSI UI in Silent mode) - but
+        it is ALSO the correct tool when you want it: the stock config's
+        Interactive install default is /QB-! (a VISIBLE basic-UI msiexec
+        window on the user's desktop). If users must never see the MSI
+        window, pass the COMPLETE set via -Parameters and include /QN:
+          "/QN REBOOT=ReallySuppress UPDATES=0 REPORTS=0 NOFIRSTSTART=1 LaunchPowerPoint=0"
+        (see Deploy-Application.ps1 in this kit). -AddParameters is only
+        right when you accept the config's per-mode UI defaults.
 
     WHY the ARP insurance: the think-cell MSI is 32-bit, so Windows Installer
     publishes its Uninstall entry under HKLM\SOFTWARE\WOW6432Node (live-verified
