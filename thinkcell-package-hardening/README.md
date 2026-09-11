@@ -74,6 +74,14 @@ table including from a renamed file; the ARP-insurance block passed
 write-when-missing / no-op-when-present / no-native-duplicate /
 exactly-one-enumeration / clean-removal checks.
 
+Break-recovery matrix (the "installed but ARP entry deleted" state, recreated
+live): maintenance reinstall from the same MSI restores the entry; `msiexec
+/f {ProductCode}` repair restores it; the UpgradeCode uninstaller works with
+no ARP key present (exit 0, fully clean); and the ARP-insurance block
+re-creates it with vars derived from a single-MSI `$dirFiles`. Every recovery
+path exits 0 — the broken state is self-correcting on the next install or
+repair deployment.
+
 ## Notes
 
 - think-cell rotates its **ProductCode every release** but keeps a stable
