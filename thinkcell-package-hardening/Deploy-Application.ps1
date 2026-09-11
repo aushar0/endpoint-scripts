@@ -61,9 +61,13 @@ Try {
 
     ## Fleet switches (think-cell deployment docs): no auto-updates, no
     ## error-reporting prompts, no first-run license dialog, no post-install
-    ## PowerPoint launch. NOTE: passed via -AddParameters (NOT -Parameters) -
-    ## -Parameters REPLACES the toolkit's config switches incl. /QN.
+    ## PowerPoint launch.
+    ## MSI UI: /QN is FORCED in every deploy mode via full -Parameters
+    ## replacement below - the stock config's Interactive default is /QB-!
+    ## (a visible basic MSI window), which users must never see. The ONLY
+    ## user-facing UI is PSADT's own (welcome prompt / progress).
     [string]$msiExtraParams = 'UPDATES=0 REPORTS=0 NOFIRSTSTART=1 LaunchPowerPoint=0'
+    [string]$msiExecParams  = "/QN REBOOT=ReallySuppress $msiExtraParams"
 
     ## Variables: Script
     [int32]$mainExitCode    = 0
@@ -209,7 +213,7 @@ If ($DeploymentType -ieq 'Install') {
 
     Try {
         Write-Log -Message "Starting installation of [$appVendor $appName $appVersion] via [$script:msiPath] with params [$msiExtraParams]..."
-        Execute-MSI -Action Install -Path $script:msiPath -AddParameters $msiExtraParams
+        Execute-MSI -Action Install -Path $script:msiPath -Parameters $msiExecParams
 
         Set-ThinkCellArpEntry
 
@@ -227,7 +231,7 @@ ElseIf ($DeploymentType -ieq 'Repair') {
 
     Try {
         Write-Log -Message "Starting repair of [$appName $appVersion] via [$script:msiPath]..."
-        Execute-MSI -Action Repair -Path $script:msiPath -AddParameters $msiExtraParams
+        Execute-MSI -Action Repair -Path $script:msiPath -Parameters $msiExecParams
 
         ## Repair also restores ARP visibility if the entry was stripped (verified live).
         Set-ThinkCellArpEntry

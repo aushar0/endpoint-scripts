@@ -90,17 +90,27 @@ insurance in Install/Repair, orphan cleanup in Uninstall,
 - `Execute-MSI -Parameters` **replaces** the config's mode switches — including
   `/QN`. Passing custom MSI properties via `-Parameters` makes the MSI run
   **full UI even in Silent mode**. Custom properties go through
-  `-AddParameters` (appends to the mode-appropriate defaults: `/QN` silent,
-  `/QB-!` interactive).
+  `-AddParameters` (appends to the mode-appropriate defaults).
+- The stock config's **Interactive default is `/QB-!` — a visible basic MSI
+  window** on the user's desktop. This package forces `/QN` in EVERY mode via
+  a deliberate full `-Parameters` replacement
+  (`/QN REBOOT=ReallySuppress <fleet props>`), so the only user-facing UI is
+  PSADT's own (welcome prompt); the raw msiexec window never appears.
 - `Execute-MSI` has **no `-ExitCodes` parameter** in 3.10.1 (that's
   `Execute-Process`). Tolerating "not installed" (1605) on uninstall is
   `-IgnoreExitCodes '1605'`; 3010/1641 are already success-with-reboot.
 
-Live-tested full cycle (Silent): install exit 0 with `/QN` verified on the
-msiexec line, LICENSEKEY verified reaching the MSI (`Property(S): LICENSEKEY`),
-repair exit 0 with the ARP entry intact, uninstall exit 0 clean, and a second
-uninstall exit 0 (1605 ignored — idempotent on machines where it never
-installed).
+Live-tested full cycle (Silent, elevated admin): install exit 0 with `/QN`
+verified on the msiexec line, LICENSEKEY verified reaching the MSI
+(`Property(S): LICENSEKEY`), repair exit 0 with the ARP entry intact,
+uninstall exit 0 clean, and a second uninstall exit 0 (1605 ignored —
+idempotent on machines where it never installed).
+
+**NT AUTHORITY\SYSTEM tested** (PsExec `-s`, the SCCM context — not just
+elevated admin): install / repair / uninstall / second-uninstall all exit 0,
+log carries `context="NT AUTHORITY\SYSTEM"`, session-0 detection flipped the
+run to NonInteractive exactly as under SCCM, and an Interactive-mode run
+confirmed `/QN` on its msiexec line (no MSI window in any deploy mode).
 
 ## Evidence
 
