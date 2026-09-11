@@ -14,6 +14,16 @@ deploy it, and the evidence behind its claims.
 
 ## Kits
 
+### [thinkcell-package-hardening](thinkcell-package-hardening/)
+
+Robust uninstall + self-healing Add/Remove-Programs entry for the think-cell
+MSI. Covers the two traps that bite packaging teams: the 32-bit MSI publishes
+its ARP entry under WOW6432Node (native-hive-only inventory sees nothing), and
+registry-discovery uninstallers go blind without that key. The uninstaller
+anchors on the UpgradeCode so it needs no ARP keys and no version-specific
+GUID; the PSADT additions derive ProductCode/version from the MSI at runtime,
+so version bumps are just a file swap.
+
 ### [camera-stack-dell-pro](camera-stack-dell-pro/)
 
 Repair for the Intel camera stack on Dell Pro laptops — the components that
