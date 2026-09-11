@@ -1,19 +1,61 @@
 ﻿<#
-Repair-MsStoreApp.ps1 - diagnose and repair Microsoft Store apps without the Store.
-GENERATED FILE - do not hand-edit; regenerate with New-MsStoreRepairScript.ps1.
-Embedded fetcher: Get-MsStorePackageLink.ps1 (SHA-256 D8815934B61B3CB1EEE168F217E10729C6AD081925017E83101D1F3C27BFB824)
-Generated: 2026-09-11 16:03
+.SYNOPSIS
+    Diagnose and repair Microsoft Store apps without the Store.
 
-Usage:
-  Repair-MsStoreApp.ps1 -App calc
-  Repair-MsStoreApp.ps1 -App calc,snip
-  Repair-MsStoreApp.ps1 -App calc -DetectOnly
-  Repair-MsStoreApp.ps1 -ProductId <id> -ExpectedFamilyName <PFN>
+.DESCRIPTION
+    Self-contained remediation for missing or broken Store apps (Calculator,
+    Snipping Tool, or any free Store app by ProductId). Diagnoses presence,
+    missing components, and Store/update-channel reachability; repairs via
+    staged re-register (elevated, no download) or a runtime fetch from
+    Microsoft's update channel with hash + signature verification; installs
+    with a dependency-mismatch retry ladder. As Local System it provisions
+    machine-wide and hands the per-user install to the signed-in console user.
+    Logs in CMTrace format (ConfigMgr standard).
 
-Output contract: [INFO]/[WARN]/[ERR] lines, DIAG key=value checks, RESULT
-lines (PRESENT/MISSING/REPAIRED/PROVISIONED/FAIL). Log file in $WorkDir.
-Exit codes: 0 ok/repaired/already present, 1 input/pin/missing(DetectOnly),
-2 fetch, 3 signature, 4 install.
+    GENERATED FILE - do not hand-edit; regenerate with
+    New-MsStoreRepairScript.ps1. Embedded fetcher:
+    Get-MsStorePackageLink.ps1 (SHA-256 D8815934B61B3CB1EEE168F217E10729C6AD081925017E83101D1F3C27BFB824). Generated: 2026-09-11 16:15.
+
+.PARAMETER App
+    App shortcut(s): 'calc', 'snip', comma-separated ('calc,snip') or repeated.
+
+.PARAMETER ProductId
+    Microsoft Store product ID for any free app. Requires -ExpectedFamilyName.
+
+.PARAMETER ExpectedFamilyName
+    Package family name pin (e.g. Microsoft.WindowsCalculator_8wekyb3d8bbwe).
+    Required with -ProductId: the Store catalog fuzzy-matches typo'd IDs to
+    unrelated apps.
+
+.PARAMETER Arch
+    Package architecture: x64 (default), x86, arm64, all.
+
+.PARAMETER DetectOnly
+    Check health and exit without changing anything. Exit 0 = present,
+    1 = missing.
+
+.PARAMETER WorkDir
+    Working directory for downloads and logs. Default %TEMP%\MsStoreRepair.
+
+.EXAMPLE
+    .\Repair-MsStoreApp.ps1 -App calc
+    Diagnose and repair Calculator.
+
+.EXAMPLE
+    .\Repair-MsStoreApp.ps1 -App calc,snip -DetectOnly
+    Health check both apps, change nothing.
+
+.EXAMPLE
+    .\Repair-MsStoreApp.ps1 -ProductId 9WZDNCRFHVN5 -ExpectedFamilyName Microsoft.WindowsCalculator_8wekyb3d8bbwe
+    Repair any free Store app by pinned ProductId.
+
+.NOTES
+    Version:   3.1.0
+    Author:    aushar0
+    Exit codes 0 repaired/present, 1 input/pin/missing (DetectOnly),
+    2 fetch failure, 3 signature failure, 4 install failure.
+    Output: [INFO]/[WARN]/[ERR] clipped-narrative lines, a SUMMARY line, and
+    a CMTrace-format log in <WorkDir>\Microsoft_StoreAppRepair_*.log.
 #>
 [CmdletBinding()]
 param(
@@ -34,15 +76,22 @@ $known = @{
 }
 
 function Write-Log {
+    # CMTrace format (ConfigMgr standard): severity renders colored in
+    # CMTrace/OneTrace; the line stays readable as plain text. type 1/2/3 =
+    # info/warning/error.
     param([string]$Level, [string]$Message)
-    $line = "{0} [{1}] {2}" -f (Get-Date -Format 'HH:mm:ss'), $Level, $Message
+    $type = switch ($Level) { 'ERR' { 3 } 'WARN' { 2 } default { 1 } }
+    $now = Get-Date
+    $tz = $now.ToString('zzz').Replace(':', '')
+    $line = '<![LOG[{0}]LOG]!><time="{1:HH:mm:ss.fff}{2}" date="{1:MM-dd-yyyy}" component="StoreAppRepair" context="" type="{3}" thread="{4}" file="Repair-MsStoreApp.ps1">' -f `
+        $Message, $now, $tz, $type, $PID
     $line | Out-File -FilePath $script:LogFile -Append -Encoding utf8
-    if ($Level -ne 'DBG') { Write-Host $line }
+    if ($Level -ne 'DBG') { Write-Host $Message }
 }
 
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 $stamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
-$LogFile = Join-Path $WorkDir ("{0}_{1}_{2}.log" -f $stamp, $env:USERNAME, $(if ($DetectOnly) { 'check' } else { 'repair' }))
+$LogFile = Join-Path $WorkDir ("Microsoft_StoreAppRepair_{0}_{1}.log" -f $(if ($DetectOnly) { 'Check' } else { 'Repair' }), $stamp)
 Write-Log 'INFO' ("Repair run. User: {0}. Mode: {1}." -f $env:USERNAME, $(if ($DetectOnly) { 'check only' } else { 'repair' }))
 Write-Log 'INFO' "log=$LogFile"
 
