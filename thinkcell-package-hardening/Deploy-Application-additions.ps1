@@ -24,7 +24,14 @@
 
     Uninstall bonus: Execute-MSI -Action Uninstall accepts the MSI FILE PATH
     and resolves the ProductCode itself:
-      Execute-MSI -Action Uninstall -Path $msiPath -ExitCodes 0,1605,3010,1641
+      Execute-MSI -Action Uninstall -Path $msiPath -IgnoreExitCodes '1605'
+    PSADT 3.10.1 TRAPS (live-proven Sep 11 2026):
+      - Execute-MSI has NO -ExitCodes parameter (that's Execute-Process); the
+        3.10.1 way to tolerate 1605 "not installed" is -IgnoreExitCodes '1605'.
+        3010/1641 are already success-with-reboot by default.
+      - -Parameters REPLACES the config's mode switches (incl. /QN) - custom
+        MSI properties must go through -AddParameters or the MSI runs with
+        full UI even in Silent mode.
 
     WHY the ARP insurance: the think-cell MSI is 32-bit, so Windows Installer
     publishes its Uninstall entry under HKLM\SOFTWARE\WOW6432Node (live-verified

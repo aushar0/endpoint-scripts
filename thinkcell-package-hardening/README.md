@@ -71,9 +71,36 @@ Two behaviors of the think-cell MSI surprise packaging teams:
 # then in Post-Install / Repair-Title:
 Set-ThinkCellArpEntry
 
-# GUID-free idempotent uninstall line for the package itself:
-Execute-MSI -Action Uninstall -Path $msiPath -ExitCodes 0,1605,3010,1641
+# GUID-free idempotent uninstall line for the package itself (PSADT 3.10.1):
+Execute-MSI -Action Uninstall -Path $msiPath -IgnoreExitCodes '1605'
 ```
+
+## The complete package
+
+`Deploy-Application.ps1` is the full PSADT 3.10.1 package script — ready to
+drop into a standard toolkit scaffold (AppDeployToolkit/ + Files/ + the exe):
+`$licenseKey` variable near the top (empty here; set at deploy time; format
+`xxxxx-xxxxx-xxxxx-xxxxx-xxxxx`, passed to the MSI as `LICENSEKEY=`, accepted
+at install time, validated in-app), MSI-derived identity, `Set-ThinkCellArpEntry`
+insurance in Install/Repair, orphan cleanup in Uninstall,
+`Show-InstallationWelcome -CloseApps 'powerpnt,excel'` in all three sections.
+
+**PSADT 3.10.1 traps baked into this kit (each cost a live test to learn):**
+
+- `Execute-MSI -Parameters` **replaces** the config's mode switches — including
+  `/QN`. Passing custom MSI properties via `-Parameters` makes the MSI run
+  **full UI even in Silent mode**. Custom properties go through
+  `-AddParameters` (appends to the mode-appropriate defaults: `/QN` silent,
+  `/QB-!` interactive).
+- `Execute-MSI` has **no `-ExitCodes` parameter** in 3.10.1 (that's
+  `Execute-Process`). Tolerating "not installed" (1605) on uninstall is
+  `-IgnoreExitCodes '1605'`; 3010/1641 are already success-with-reboot.
+
+Live-tested full cycle (Silent): install exit 0 with `/QN` verified on the
+msiexec line, LICENSEKEY verified reaching the MSI (`Property(S): LICENSEKEY`),
+repair exit 0 with the ARP entry intact, uninstall exit 0 clean, and a second
+uninstall exit 0 (1605 ignored — idempotent on machines where it never
+installed).
 
 ## Evidence
 
