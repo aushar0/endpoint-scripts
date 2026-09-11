@@ -136,11 +136,12 @@ PackageFamilyName.
 
 Behavior details that matter in the field:
 
-- **Output contract.** Terse machine-readable lines only: `[INFO]/[WARN]/[ERR]`,
-  `DIAG key=value` checks (presence, dependency gaps, activation-failure count,
-  Store/update-channel reachability), and a final `RESULT PRESENT / MISSING /
-  REPAIRED / PROVISIONED / FAIL` line. A full timestamped log lands in
-  `%TEMP%\MsStoreRepair\<stamp>_<user>_<mode>.log`.
+- **Output contract.** Clipped narrative lines (`[INFO]/[WARN]/[ERR]`):
+  reachability checks, per-app status ("Calculator healthy: version ...
+  registered, all required components present"), each action taken, and a
+  one-line `SUMMARY:` for the ticket. A full timestamped log lands in
+  `%TEMP%\MsStoreRepair\<stamp>_<user>_<mode>.log`. Spell words out; no
+  shorthand.
 - **Idempotent.** App registered at any version = "nothing to do", exit 0.
 - **Staged-but-unregistered is detected and repaired with zero download** when
   elevated: after an uninstall the package often remains staged machine-wide; the
