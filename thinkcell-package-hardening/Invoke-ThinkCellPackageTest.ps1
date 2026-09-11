@@ -78,7 +78,7 @@ if ($ExtractOnly) {
     exit 0
 }
 
-$fleetSwitches = @('/qn', '/norestart', 'UPDATES=0', 'REPORTS=0', 'NOFIRSTSTART=1')
+$fleetSwitches = @('/qn', '/norestart', 'UPDATES=0', 'REPORTS=0', 'NOFIRSTSTART=1', 'LaunchPowerPoint=0')
 if ($LicenseKey) { $fleetSwitches += "LICENSEKEY=$LicenseKey" }
 
 # ---- phase 2: silent install ----

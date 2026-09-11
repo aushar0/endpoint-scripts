@@ -127,6 +127,9 @@ Try {
     }
     Else {
         $msiExtraParams = "$msiExtraParams LICENSEKEY=`"$licenseKey`""
+        # rebuild the exec string AFTER the append - building it at declaration
+        # time silently dropped the key (caught by the Sep 11 sdlc bugs pass)
+        $msiExecParams  = "/QN REBOOT=ReallySuppress $msiExtraParams"
         Write-Log -Message 'think-cell: $licenseKey is set - passing LICENSEKEY to the MSI.'
     }
 
