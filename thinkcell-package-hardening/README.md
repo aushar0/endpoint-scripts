@@ -56,6 +56,16 @@ Two behaviors of the think-cell MSI surprise packaging teams:
     `THINKCELL_ARP` key=value lines for post-mortem grep, all through PSADT
     `Write-Log` only, so toolkit-configured log locations just work).
   - Post-Uninstall cleanup loop for an entry the MSI uninstall might orphan.
+- **`detection.ps1`** — one detection script for BOTH SCCM (Deployment Type >
+  Detection Method > custom PowerShell script) and Intune (Win32 app >
+  detection rules > custom detection script); both run as SYSTEM. Contract:
+  **detected = exit 0 WITH stdout** (Intune counts exit 0 with empty stdout
+  as NOT detected). Signal = Windows Installer registration anchored on the
+  stable UpgradeCode — not the ARP key (can vanish while the product is
+  healthy), not the ProductCode (rotates every release). Optional
+  `$minimumVersion` floor fails detection when only an older release remains
+  (guards against failed-upgrade false compliance). Version swaps: optionally
+  bump `$minimumVersion`, nothing else.
 - **`Invoke-ThinkCellPackageTest.ps1`** — one-shot elevated verification
   harness: extracts MSI properties, installs `/qn`, captures evidence
   (ARP entry in either hive, install dir, Office add-in keys, file versions),
