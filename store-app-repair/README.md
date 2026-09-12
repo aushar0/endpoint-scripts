@@ -289,10 +289,12 @@ Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser -Force -SkipPublish
 Invoke-Pester -Path tests/
 ```
 
-## Verification status (2026-09-11, Windows 11 26200, single machine)
+## Verification status (2026-09-11, Windows 11 25H2 family: two machines)
 
-Design is field-shaped; validation to date is lab-grade, on one daily-driver
-machine. Raw artifacts in `evidence/`.
+Design is field-shaped; validation to date is lab-grade: the author's
+daily-driver plus a second Hyper-V VM (different inventory, different user,
+elevated context, Microsoft Store unreachable from the VM). Raw artifacts in
+`evidence/`.
 
 | Verified live | Evidence |
 |---|---|
@@ -306,7 +308,8 @@ machine. Raw artifacts in `evidence/`.
 
 | SYSTEM branch: provision machine-wide + hidden scheduled-task install for the console user | Verified live (2026-09-11, PsExec SYSTEM - the Intune-equivalent context). Note: the handoff may complete moments after the tool reports; provisioning covers the user either way |
 | Real state corruption | Could not be reproduced (the app tolerated a damaged state folder); `Reset-AppxPackage` verified as a cmdlet only |
-| Cross-build (Win10 22H2/24H2), multi-user, fleet scale, AV interference | Pending - fleet validation |
+| Second machine (PackLab02 VM: separate inventory/user, elevated, Store unreachable) | `evidence/packlab02-results.txt` - all three passes green |
+| Cross-BUILD (24H2, Win10 22H2), multi-user, fleet scale, AV interference | Pending - fleet validation |
 | Chaos: AppXSvc disabled by policy, locked log, concurrent runs, named-app-missing | Verified - see the chaos matrix above |
 
 ## Known limitations

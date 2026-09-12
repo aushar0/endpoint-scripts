@@ -1,0 +1,26 @@
+=== PackLab02 cross-build battery 00:15:35 ===
+files staged: detection.ps1, remediation.ps1, Repair-MsStoreApp.ps1, run_lab_test.ps1
+=== store-app-repair lab test ===
+[INFO] Engine: PowerShell 5.1.26100.7920 (CLR 4.0.30319.42000) on Microsoft Windows 11 Pro build 26200
+=== PASS 1: detection (all apps) ===
+[INFO] Engine: PowerShell 5.1.26100.7920 (CLR 4.0.30319.42000) on Microsoft Windows 11 Pro build 26200
+All registered apps healthy.
+pass1 exit: 0
+=== PASS 2: remediation (no-download ladder) ===
+All registered apps healthy. No action needed.
+pass2 exit: 0
+=== PASS 3: repair tool, silent check (calc + snip) ===
+Repair run. User: lab. Mode: check only.
+log=C:\Users\lab\AppData\Local\Temp\MsStoreRepair\Microsoft_StoreAppRepair_Check_20260912-001601.log
+Running as PACKLAB02\lab. Elevated: True. System: False. Console user: .
+Microsoft Store unreachable; update channel ok. Repairs fetch direct from the update channel.
+--- target Calculator (Microsoft.WindowsCalculator) ---
+Calculator healthy: version 11.2607.0.0 registered, all required components present.
+--- target Snipping Tool (Microsoft.ScreenSketch) ---
+Snipping Tool healthy: version 11.2605.38.0 registered, all required components present.
+SUMMARY: Calculator: healthy, version 11.2607.0.0 | Snipping Tool: healthy, version 11.2605.38.0 No action needed.
+Done. Exit code 0. Full log: C:\Users\lab\AppData\Local\Temp\MsStoreRepair\Microsoft_StoreAppRepair_Check_20260912-001601.log
+pass3 exit: 0
+=== lab test complete ===
+GUEST RUNNER EXIT: 0
+=== done 00:16:04 ===
