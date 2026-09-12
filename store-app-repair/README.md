@@ -222,6 +222,12 @@ Behavior details that matter in the field:
 | Elevated admin | Same, plus staged fast-path repair and `-AllUsers` visibility in diagnostics. |
 | NT SYSTEM (RMM / ConfigMgr push) | Per-user `Add-AppxPackage` is not usable: SYSTEM has no user profile, and this cmdlet set has no `-AllUsers` parameter (both verified live). Use the provision lane instead: `Add-AppxProvisionedPackage -Online -Path <bundle> -DependencyPath <deps> -SkipLicense` (machine-wide, registers users at next logon), or hand the per-user install to the console user's session from your deployment tooling. |
 
+**Silent by design.** The user never sees an elevation prompt or a window.
+SYSTEM-context runs (Intune default) do everything: provisioning is SYSTEM,
+and the per-user install for the signed-in user runs through a one-shot
+scheduled task whose PowerShell is launched window-less by a wscript
+launcher. Standard-user runs need no elevation by definition.
+
 winget's msstore source requires Store metadata endpoints to resolve; when they
 are blocked or broken it fails with `12007 / 0x80072ee7` and no packages are
 found. The repair script's channel is independent of the Store endpoints.
@@ -298,11 +304,10 @@ machine. Raw artifacts in `evidence/`.
 | `Add-AppxPackage -Path <URL>` from the aka.ms VCLibs permalink | fails 0x80073D06 only when a newer version is already installed (correct) |
 | Framework-removal guard: OS refuses removal with dependents (0x80073CF3) | this session |
 
-| Not yet verified | Status |
-|---|---|
-| SYSTEM branch (provision + console-user handoff) | Implemented per the documented DISM lane; the script emits a loud WARN when the path runs; awaiting one elevated run |
+| SYSTEM branch: provision machine-wide + hidden scheduled-task install for the console user | Verified live (2026-09-11, PsExec SYSTEM - the Intune-equivalent context). Note: the handoff may complete moments after the tool reports; provisioning covers the user either way |
 | Real state corruption | Could not be reproduced (the app tolerated a damaged state folder); `Reset-AppxPackage` verified as a cmdlet only |
-| Cross-build (Win10 22H2/24H2), multi-user, fleet scale | Pending |
+| Cross-build (Win10 22H2/24H2), multi-user, fleet scale, AV interference | Pending - fleet validation |
+| Chaos: AppXSvc disabled by policy, locked log, concurrent runs, named-app-missing | Verified - see the chaos matrix above |
 
 ## Known limitations
 
@@ -310,8 +315,8 @@ machine. Raw artifacts in `evidence/`.
 - The DNS reachability probe has no timeout on name resolution.
 - The dependency-ladder's standalone rung installs frameworks without checking
   the manifest's minimum-version floor (the diagnosis path does check it).
-- The SYSTEM scheduled-task handoff pattern is environment-sensitive; treat it
-  as single-build until cross-build tested.
+- The SYSTEM scheduled-task handoff pattern is validated on one build
+  (26200); cross-build behavior should be confirmed on the pilot ring.
 
 ## Sources
 

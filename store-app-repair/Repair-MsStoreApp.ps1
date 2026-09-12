@@ -14,7 +14,7 @@
 
     GENERATED FILE - do not hand-edit; regenerate with
     New-MsStoreRepairScript.ps1. Embedded fetcher:
-    Get-MsStorePackageLink.ps1 (SHA-256 D8815934B61B3CB1EEE168F217E10729C6AD081925017E83101D1F3C27BFB824). Generated: 2026-09-11 21:55.
+    Get-MsStorePackageLink.ps1 (SHA-256 D8815934B61B3CB1EEE168F217E10729C6AD081925017E83101D1F3C27BFB824). Generated: 2026-09-11 23:54.
 
 .PARAMETER App
     App shortcut(s): 'calc', 'snip', comma-separated ('calc,snip') or repeated.
@@ -50,7 +50,7 @@
     Repair any free Store app by pinned ProductId.
 
 .NOTES
-    Version:   3.2.0
+    Version:   3.2.2
     Author:    aushar0
     Exit codes 0 repaired/present, 1 input/pin/missing (DetectOnly),
     2 fetch failure, 3 signature failure, 4 install failure.
@@ -230,7 +230,7 @@ foreach ($t in $targets) {
     }
 
     # ---- repair path 1: staged + elevated -> re-register, no download ----
-    if (-not $view.Registered -and $view.Staged -and $isAdmin) {
+    if (-not $view.Registered -and $view.Staged -and $isAdmin -and -not $isSystem) {
         Write-Log 'INFO' ("{0} staged copy found; re-registering without download." -f $title)
         try {
             Add-AppxPackage -Path (Join-Path $view.Staged.InstallLocation 'AppxManifest.xml') -Register -DisableDevelopmentMode -ErrorAction Stop
@@ -290,8 +290,10 @@ Write-Log 'INFO' ("{0} missing. Fetching from the Microsoft update channel ({1})
             Write-Log 'WARN' "SYSTEM branch: provision path implemented per the documented DISM lane; not yet validated on a managed device."
             Write-Log 'INFO' ("SYSTEM context: provisioning {0} machine-wide." -f $title)
             try {
-                $prov = @{ Online = $true; Path = $main.FullName; SkipLicense = $true }
-                if ($deps.Count) { $prov.DependencyPath = $deps.FullName }
+                # -PackagePath, not -Path: -Path is the Offline image-servicing
+                # set and collides with -Online (verified against the live cmdlet)
+                $prov = @{ Online = $true; PackagePath = $main.FullName; SkipLicense = $true }
+                if ($deps.Count) { $prov.DependencyPackagePath = $deps.FullName }
                 Add-AppxProvisionedPackage @prov | Out-Null
                 Write-Log 'INFO' "Provisioning completed."
                 $raStatus[$pkgName] = 'provisioned'; $raAction = 'provision'
@@ -304,17 +306,48 @@ Write-Log 'INFO' ("{0} missing. Fetching from the Microsoft update channel ({1})
                 Write-Log 'INFO' ("ACTION console_user_handoff user={0}" -f $consoleUser)
                 $okFile = Join-Path $WorkDir 'handoff_ok.txt'
                 $errFile = Join-Path $WorkDir 'handoff_err.txt'
-                $snippet = @"
-`$err=''
-try { Add-AppxPackage -Path '$($main.FullName)' -ErrorAction Stop } catch { `$err=`$_.Exception.Message }
-if (-not `$err) { [IO.File]::WriteAllText('$okFile','ok') } else { [IO.File]::WriteAllText('$errFile',`$err) }
-"@
-                $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($snippet))
+                # stale signal files from prior runs would corrupt the outcome read
+                Remove-Item $okFile, $errFile -Force -ErrorAction SilentlyContinue
+                # staged files live under SYSTEM's %TEMP% which the user cannot
+                # read - copy the set to a user-readable location first
+                $publicDir = 'C:\Users\Public\MsStoreRepair'
+                New-Item -ItemType Directory -Force -Path $publicDir | Out-Null
+                Copy-Item $main.FullName $publicDir -Force
+                foreach ($d in $deps) { Copy-Item $d.FullName $publicDir -Force }
+                $pubMain = Join-Path $publicDir $main.Name
+                $pubDeps = @($deps | ForEach-Object { Join-Path $publicDir $_.Name })
+                $depList = ($pubDeps | ForEach-Object { "'{0}'" -f $_ }) -join ','
+                $handoffLines = @(
+                    "`$err = ''"
+                    "try { Add-AppxPackage -Path '$pubMain' -DependencyPath @($depList) -ErrorAction Stop } catch { `$err = `$_.Exception.Message }"
+                    "if (`$err -match '0x80073CF3') {"
+                    "  `$err = ''"
+                    "  try { Add-AppxPackage -Path '$pubMain' -ErrorAction Stop } catch { `$err = `$_.Exception.Message }"
+                    "  if (`$err -match '0x80073CF3') {"
+                    "    `$err = ''"
+                    "    foreach (`$f in @($depList)) { try { Add-AppxPackage -Path `$f -ErrorAction Stop } catch {} }"
+                    "    try { Add-AppxPackage -Path '$pubMain' -ErrorAction Stop } catch { `$err = `$_.Exception.Message }"
+                    "  }"
+                    "}"
+                    "if (`$err) { Set-Content -Path '$errFile' -Value `$err } else { Set-Content -Path '$okFile' -Value 'ok' }"
+                )
+                $handoffPs1 = Join-Path $publicDir 'handoff.ps1'
+                Set-Content -Path $handoffPs1 -Value $handoffLines -Encoding utf8
+                # hidden launcher: the task runs wscript which starts powershell
+                # window-less - the user sees nothing (silence requirement)
+                $runVbs = Join-Path $publicDir 'run_hidden.vbs'
+                # [char]34 = double quote; avoids tripled-quote escapes entirely
+                $q = [char]34
+                $vbsLine = 'CreateObject("Wscript.Shell").Run ' + $q + 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ' + $q + $q + $handoffPs1 + $q + $q + ', 0, True'
+                Set-Content -Path $runVbs -Value $vbsLine -Encoding ascii
+                $action  = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ($q + $runVbs + $q)
                 $tn = "MsStoreRepair-$pkgName-$stamp"
                 try {
-                    $action  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc"
                     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(5)
-                    Register-ScheduledTask -TaskName $tn -User $consoleUser -LogonType Interactive -RunLevel Limited -Action $action -Trigger $trigger -ErrorAction Stop | Out-Null
+                    # this build's Register-ScheduledTask takes -Principal (LogonType
+                    # lives on the principal object), not bare -User/-LogonType
+                    $principal = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Limited
+                    Register-ScheduledTask -TaskName $tn -Principal $principal -Action $action -Trigger $trigger -ErrorAction Stop | Out-Null
                     Start-ScheduledTask -TaskName $tn
                     $waited = 0
                     while ((Get-ScheduledTask -TaskName $tn).State -ne 'Ready' -and $waited -lt 120) { Start-Sleep -Seconds 2; $waited += 2 }
