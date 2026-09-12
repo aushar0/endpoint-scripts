@@ -22,6 +22,9 @@
 .NOTES
     Version: 1.0.0
     Detail log: %TEMP%\store-app-repair-remediation.log
+
+.NOTES
+    Version: 1.1.0
 #>
 [CmdletBinding()]
 param(
@@ -31,6 +34,35 @@ param(
 $ErrorActionPreference = 'Continue'
 $logFile = Join-Path $env:TEMP "store-app-repair-remediation.log"
 "remediation run $(Get-Date) user=$env:USERNAME" | Out-File $logFile -Append -Encoding utf8
+
+function Get-FailureDiagnosis {
+    # Same taxonomy as detection.ps1: specific cause, full text preserved.
+    param($Exception)
+    $e = "$($Exception)"
+    switch -Regex ($e) {
+        '0x80073D02' { return 'files in use by running apps (close the listed apps or retry later)' }
+        '0x80073D06' { return 'a newer version is already registered (healthy state)' }
+        '0x80073CF3' { return 'dependency conflict: the package needs components in a different state than registered' }
+        '0x80070005|Access is denied|UnauthorizedAccess' { return 'access denied - file ACLs, security software, or wrong context' }
+        '0x80072EE7|12007' { return 'name resolution failed - endpoint blocked by DNS, hosts file, VPN, or proxy' }
+        '0x80072EFD|0x80072F8F|timeout|timed out' { return 'network unreachable or TLS blocked' }
+        '0x80070424|service cannot be started' { return 'a required Windows service is not running' }
+        '0x80073CF9' { return 'install rejected - possibly missing entitlement/license for this app' }
+    }
+    $h = $Exception.Exception.HResult
+    if ($h -and $h -ne 0) { return "HRESULT 0x{0:X8}: {1}" -f $h, $e }
+    return $e
+}
+
+# Concurrency guard: a management service and a user can trigger this at the
+# same time. Serialize; never run two repairs interleaved.
+$mutex = New-Object System.Threading.Mutex($false, 'Local\store-app-repair-remediation')
+$held = $false
+try { $held = $mutex.WaitOne(30000) } catch { $held = $false }
+if (-not $held) {
+    Write-Host "Another instance of this remediation is still running (waited 30s). Try again later."
+    exit 1
+}
 
 # Detect (dot-sourcing keeps one implementation of the health check).
 . (Join-Path $PSScriptRoot 'detection.ps1')
@@ -45,6 +77,7 @@ if ($MyInvocation.InvocationName -ne '.') {
 $issues = @(Test-AppxHealth -FamilyName $FamilyName)
 if (-not $issues.Count) {
     Write-Host "All registered apps healthy. No action needed."
+    $mutex.ReleaseMutex(); $mutex.Dispose()
     exit 0
 }
 Write-Host ("{0} broken app(s) found. Repairing..." -f $issues.Count)
@@ -72,7 +105,7 @@ foreach ($issue in ($issues | Sort-Object App -Unique)) {
                 $errs.Exception.Message | Out-File $logFile -Append -Encoding utf8
             }
             else {
-                Write-Host ("  FAIL {0} - logged" -f $t.Name)
+                Write-Host ("  FAIL {0}: {1}" -f $t.Name, (Get-FailureDiagnosis $errs[0]))
                 $errs.Exception.Message | Out-File $logFile -Append -Encoding utf8
             }
         }
@@ -89,7 +122,11 @@ foreach ($issue in ($issues | Sort-Object App -Unique)) {
             catch {
                 # 0x80073D06 = newer already registered: healthy, keep going.
                 if ("$($_.Exception)" -notmatch '0x80073D06') {
-                    Write-Host ("  FAIL VCLibs permalink - logged")
+                    $diag = Get-FailureDiagnosis $_
+                    if ($diag -match 'name resolution') {
+                        $diag += ' - the permalink host (aka.ms) could not be resolved from this machine.'
+                    }
+                    Write-Host ("  FAIL VCLibs download: {0}" -f $diag)
                     $_.Exception.Message | Out-File $logFile -Append -Encoding utf8
                 }
             }
@@ -105,9 +142,11 @@ if ($remaining.Count) {
         Write-Host ("[STILL BROKEN] {0}: {1} - {2}" -f $i.App, $i.Kind, $i.Detail)
     }
     Write-Host "This pair repairs registration and missing-component cases without downloads. For the download path (fetch from Microsoft's update channel), see README 'The one-command option'."
+    $mutex.ReleaseMutex(); $mutex.Dispose()
     exit 1
 }
 
 Write-Host ("Repaired: {0}. All registered apps healthy." -f (($handled | Sort-Object -Unique) -join ', '))
+$mutex.ReleaseMutex(); $mutex.Dispose()
 exit 0
 }

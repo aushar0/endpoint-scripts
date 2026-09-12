@@ -15,11 +15,14 @@
     account has no user profile to inspect. Configure the Intune remediation
     to "Run this script using the logged on credentials".
 
+    Every failure path emits a specific diagnosis (service state, access
+    denied, DNS/name resolution, engine version) - never a bare error code.
+
     Exit codes (Intune detection contract): 0 = healthy, 1 = broken app found
-    (run remediation), 1 = wrong context (SYSTEM).
+    (run remediation) or infrastructure problem.
 
 .NOTES
-    Version: 1.0.0
+    Version: 1.1.0
     Part of the store-app-repair kit. See README.md for the full repair
     ladder, revert directions, and verification ledger.
 #>
@@ -28,6 +31,48 @@ param(
     # Restrict the scan to specific package family names. Default: all apps.
     [string[]]$FamilyName
 )
+
+function Write-Preflight {
+    # Engine + infrastructure identity: makes ".NET/PS too old" and
+    # "service down" visible without guessing.
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    Write-Host ("[INFO] Engine: PowerShell {0} (CLR {1}) on {2} build {3}" -f `
+        $PSVersionTable.PSVersion, $PSVersionTable.CLRVersion, $os.Caption, $os.BuildNumber)
+    # AppXSvc is trigger-started: 'Stopped' between deployments is its healthy
+    # resting state (chaos-tested 2026-09-11 - gating on Status would fail every
+    # healthy machine). The real failure is a policy that DISABLES it: then no
+    # install or repair can ever run.
+    $svc = Get-Service -Name AppXSvc -ErrorAction SilentlyContinue
+    if (-not $svc) {
+        Write-Host "[ERR] AppX deployment service (AppXSvc) not found - Windows app infrastructure is damaged. App checks cannot run."
+        return $false
+    }
+    if ($svc.StartType -eq 'Disabled') {
+        Write-Host "[ERR] AppX deployment service (AppXSvc) is Disabled by policy - no Store app install or repair can run. Re-enable the service (hardening baseline conflict)."
+        return $false
+    }
+    return $true
+}
+
+function Get-FailureDiagnosis {
+    # Maps an exception to a specific cause. Unknown errors keep their full
+    # text - the taxonomy narrows, it never hides.
+    param($Exception)
+    $e = "$($Exception)"
+    switch -Regex ($e) {
+        '0x80073D02' { return 'files in use by running apps (close the listed apps or retry later)' }
+        '0x80073D06' { return 'a newer version is already registered (healthy state)' }
+        '0x80073CF3' { return 'dependency conflict: the package needs components in a different state than registered' }
+        '0x80070005|Access is denied|UnauthorizedAccess' { return 'access denied - file ACLs, security software, or wrong context' }
+        '0x80072EE7|12007' { return 'name resolution failed - endpoint blocked by DNS, hosts file, VPN, or proxy' }
+        '0x80072EFD|0x80072F8F|timeout|timed out' { return 'network unreachable or TLS blocked' }
+        '0x80070424|service cannot be started' { return 'a required Windows service is not running' }
+        '0x80073CF9' { return 'install rejected - possibly missing entitlement/license for this app' }
+    }
+    $h = $Exception.Exception.HResult
+    if ($h -and $h -ne 0) { return "HRESULT 0x{0:X8}: {1}" -f $h, $e }
+    return $e
+}
 
 function Test-AppxHealth {
     # Returns one issue object per broken app. App-centric: frameworks are
@@ -65,10 +110,19 @@ function Test-AppxHealth {
             }
         }
         catch {
-            $issues += [pscustomobject]@{ Kind = 'manifest_unreadable'; App = $app.Name; Family = $app.PackageFamilyName; Version = $app.Version; Detail = $_.Exception.Message }
+            $issues += [pscustomobject]@{ Kind = 'manifest_unreadable'; App = $app.Name; Family = $app.PackageFamilyName; Version = $app.Version; Detail = Get-FailureDiagnosis $_ }
         }
     }
     # callers wrap with @(), so single-element unwrap-on-return is harmless
+    # A named family that is not registered at all is only detectable when the
+    # caller names apps - flag it so "missing" is never a silent healthy.
+    if ($FamilyName) {
+        foreach ($f in $FamilyName) {
+            if (-not ($apps.PackageFamilyName -contains $f) -and -not ($issues | Where-Object Family -eq $f)) {
+                $issues += [pscustomobject]@{ Kind = 'missing'; App = ($f -split '_')[0]; Family = $f; Version = ''; Detail = 'named app is not installed for this user; repair cannot create it without a download (see the one-command option)' }
+            }
+        }
+    }
     return @($issues)
 }
 
@@ -82,7 +136,15 @@ if ($MyInvocation.InvocationName -ne '.') {
         exit 1
     }
 
-    $issues = @(Test-AppxHealth -FamilyName $FamilyName)
+    if (-not (Write-Preflight)) { exit 1 }
+
+    try {
+        $issues = @(Test-AppxHealth -FamilyName $FamilyName)
+    }
+    catch {
+        Write-Host ("[ERR] AppX query failed: {0}" -f (Get-FailureDiagnosis $_))
+        exit 1
+    }
     if ($issues.Count) {
         foreach ($i in $issues) {
             Write-Host ("[WARN] {0} {1}: {2} - {3}" -f $i.App, $i.Version, $i.Kind, $i.Detail)

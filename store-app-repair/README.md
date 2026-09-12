@@ -124,6 +124,29 @@ apps); framework packages are only evaluated through their dependents; the
 version floor is checked against the best-installed copy of a component
 (frameworks register per-architecture).
 
+## Chaos matrix and failure taxonomy
+
+The pair was chaos-tested: each failure class below was deliberately created
+and the scripts' response verified. Every failure path names its cause -
+never a bare error code.
+
+| Chaos injected | Result | Verified |
+|---|---|---|
+| AppXSvc disabled by policy (registry) | Detection: `[ERR] AppXSvc is Disabled by policy - no Store app install or repair can run`, exit 1. (Trigger-started `Stopped` is the healthy resting state - gating on it would fail every healthy machine.) | yes |
+| Exclusive lock on the remediation log | Remediation completes, exit 0 (log write loss accepted; stdout is the primary surface) | yes |
+| Two remediations running concurrently | Named-mutex serializes; second instance waits 30s then fails loudly, never interleaved | yes |
+| Named app absent but expected (`-FamilyName`) | Flagged `missing` with the no-download caveat instead of a silent healthy | yes |
+| Component missing / below manifest floor | Synthetic-package tests cover both (the OS guards real framework removal) | yes (mock) |
+| Unreadable manifest | Flagged `manifest_unreadable` with the diagnosis, never swallowed | yes (mock) |
+
+Failure output taxonomy (applies to every FAIL/WARN/ERR line):
+in-use by running apps (0x80073D02) - newer version already present (0x80073D06)
+- dependency conflict (0x80073CF3) - access denied / ACLs / security software
+(0x80070005) - name resolution blocked: DNS, hosts, VPN, proxy (12007) -
+network unreachable or TLS blocked - required Windows service not running -
+install rejected / entitlement (0x80073CF9) - anything unknown keeps its full
+text plus HRESULT. The taxonomy narrows; it never hides.
+
 ## Blast radius
 
 Per-user app state lives in `%LOCALAPPDATA%\Packages\<PackageFamilyName>`:

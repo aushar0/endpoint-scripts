@@ -5,24 +5,8 @@
 
 Describe 'Test-AppxHealth (synthetic packages)' {
     BeforeAll {
+        . (Join-Path $PSScriptRoot 'fakes.ps1')
         . (Join-Path $PSScriptRoot '..\detection.ps1')
-
-        function New-FakePkg {
-            param($Name, $Pfn, $Version, $Status = 'Ok', $IsFramework = $false, $Dependencies = @())
-            [pscustomobject]@{
-                Name = $Name; PackageFamilyName = $Pfn; Version = $Version; Status = $Status
-                IsFramework = $IsFramework; Dependencies = $Dependencies
-                InstallLocation = 'C:\Fake\Location'
-            }
-        }
-        function New-FakeManifest {
-            param([string]$DepName, [string]$MinVersion)
-            $dep = @()
-            if ($DepName) {
-                $dep = @([pscustomobject]@{ Name = $DepName; MinVersion = $MinVersion })
-            }
-            [pscustomobject]@{ Package = [pscustomobject]@{ Dependencies = [pscustomobject]@{ PackageDependency = $dep } } }
-        }
     }
 
     It 'healthy app with present, sufficient component: no issues' {
@@ -39,9 +23,7 @@ Describe 'Test-AppxHealth (synthetic packages)' {
     }
 
     It 'unhealthy Status is flagged' {
-        Mock Get-AppxPackage {
-            @((New-FakePkg 'App.B' 'B_1' '1.0.0.0' -Status 'Modified'))
-        }
+        Mock Get-AppxPackage { @((New-FakePkg 'App.B' 'B_1' '1.0.0.0' -Status 'Modified')) }
         Mock Get-AppxPackageManifest { New-FakeManifest }
         $issues = Test-AppxHealth
         @($issues).Count | Should -Be 1
@@ -72,9 +54,7 @@ Describe 'Test-AppxHealth (synthetic packages)' {
     }
 
     It 'frameworks are not flagged directly (app-centric view)' {
-        Mock Get-AppxPackage {
-            @((New-FakePkg 'Comp.X' 'X_1' '1.0.0.0' -Status 'Modified' -IsFramework $true))
-        }
+        Mock Get-AppxPackage { @((New-FakePkg 'Comp.X' 'X_1' '1.0.0.0' -Status 'Modified' -IsFramework $true)) }
         Mock Get-AppxPackageManifest { New-FakeManifest }
         $issues = Test-AppxHealth
         @($issues).Count | Should -Be 0
@@ -89,13 +69,61 @@ Describe 'Test-AppxHealth (synthetic packages)' {
     }
 
     It 'FamilyName filter restricts the scan' {
-        Mock Get-AppxPackage {
-            @((New-FakePkg 'App.F' 'F_1' '1.0.0.0' -Status 'Modified'), (New-FakePkg 'App.G' 'G_1' '1.0.0.0' -Status 'Modified'))
-        }
+        Mock Get-AppxPackage { @((New-FakePkg 'App.F' 'F_1' '1.0.0.0' -Status 'Modified'), (New-FakePkg 'App.G' 'G_1' '1.0.0.0' -Status 'Modified')) }
         Mock Get-AppxPackageManifest { New-FakeManifest }
         $issues = Test-AppxHealth -FamilyName 'G_1'
         @($issues).Count | Should -Be 1
         $issues[0].App | Should -Be 'App.G'
+    }
+
+    It 'named family that is not registered is flagged missing' {
+        Mock Get-AppxPackage { @((New-FakePkg 'App.H' 'H_1' '1.0.0.0')) }
+        Mock Get-AppxPackageManifest { New-FakeManifest }
+        $issues = @(Test-AppxHealth -FamilyName 'Never.Installed_8wekyb3d8bbwe')
+        $missing = @($issues | Where-Object Kind -eq 'missing')
+        $missing.Count | Should -Be 1
+        $missing[0].Detail | Should -Match 'without a download'
+    }
+}
+
+Describe 'Failure taxonomy and infrastructure gates' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot 'fakes.ps1')
+        . (Join-Path $PSScriptRoot '..\detection.ps1')
+    }
+
+    It 'diagnoses in-use as specific cause' {
+        $msg = 'Deployment failed with HRESULT: 0x80073D02, resources in use'
+        Get-FailureDiagnosis ([pscustomobject]@{ ToString = $msg }) | Should -Match 'in use'
+    }
+
+    It 'diagnoses name-resolution failure as endpoint-blocked' {
+        $msg = 'WinHttpSendRequest: 12007. The server name or address could not be resolved'
+        Get-FailureDiagnosis ([pscustomobject]@{ ToString = $msg }) | Should -Match 'name resolution'
+    }
+
+    It 'diagnoses access-denied as ACL or security software' {
+        $msg = 'Access is denied. (Exception from HRESULT: 0x80070005)'
+        Get-FailureDiagnosis ([pscustomobject]@{ ToString = $msg }) | Should -Match 'access denied'
+    }
+
+    It 'unknown failures keep their full text with HRESULT' {
+        $msg = 'Weird failure 0x8A15002B occurred'
+        $d = Get-FailureDiagnosis ([pscustomobject]@{ ToString = $msg })
+        $d | Should -Match '0x8A15002B'
+        $d | Should -Match 'Weird failure'
+    }
+
+    It 'preflight fails specifically when AppXSvc is Disabled by policy' {
+        Mock Get-Service { [pscustomobject]@{ Name = 'AppXSvc'; Status = 'Stopped'; StartType = 'Disabled' } }
+        Mock Get-CimInstance { [pscustomobject]@{ Caption = 'Windows 11'; BuildNumber = '26200' } }
+        Write-Preflight | Should -Be $false
+    }
+
+    It 'preflight passes when AppXSvc is trigger-started Stopped (healthy resting state)' {
+        Mock Get-Service { [pscustomobject]@{ Name = 'AppXSvc'; Status = 'Stopped'; StartType = 'Automatic' } }
+        Mock Get-CimInstance { [pscustomobject]@{ Caption = 'Windows 11'; BuildNumber = '26200' } }
+        Write-Preflight | Should -Be $true
     }
 }
 
