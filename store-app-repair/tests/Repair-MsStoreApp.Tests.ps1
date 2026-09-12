@@ -7,11 +7,13 @@
 
 # Discovery-time value: the -Skip expression below evaluates before BeforeAll.
 $devGenerator = Join-Path $PSScriptRoot '..\New-MsStoreRepairScript.ps1'
-$devTool = Join-Path $PSScriptRoot '..\dist\Repair-MsStoreApp.ps1'
+$devTool = if (Test-Path (Join-Path $PSScriptRoot '..\dist\Repair-MsStoreApp.ps1')) { Join-Path $PSScriptRoot '..\dist\Repair-MsStoreApp.ps1' } else { Join-Path $PSScriptRoot '..\Repair-MsStoreApp.ps1' }
 
 Describe 'Generated script - static contract' {
     BeforeAll {
-        $tool = Join-Path $PSScriptRoot '..\dist\Repair-MsStoreApp.ps1'
+        $dist = Join-Path $PSScriptRoot '..\dist\Repair-MsStoreApp.ps1'
+        $flat = Join-Path $PSScriptRoot '..\Repair-MsStoreApp.ps1'
+        $tool = if (Test-Path $dist) { $dist } else { $flat }
         $raw = Get-Content $tool -Raw
         # Pester 5's Should proxy stringifies inline expressions - precompute
         $cmtraceMarker = [regex]::Escape('<![LOG[')
@@ -68,7 +70,7 @@ Describe 'Generator (dev tree only)' {
     BeforeAll {
         # run-phase scope: file-top variables do not carry into It bodies
         $devGenerator = Join-Path $PSScriptRoot '..\New-MsStoreRepairScript.ps1'
-        $devTool = Join-Path $PSScriptRoot '..\dist\Repair-MsStoreApp.ps1'
+        $devTool = if (Test-Path (Join-Path $PSScriptRoot '..\dist\Repair-MsStoreApp.ps1')) { Join-Path $PSScriptRoot '..\dist\Repair-MsStoreApp.ps1' } else { Join-Path $PSScriptRoot '..\Repair-MsStoreApp.ps1' }
     }
     It 'is deterministic (same output modulo generation timestamp)' -Skip:(-not ($devGenerator -and (Test-Path $devGenerator))) {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $devGenerator *> $null
@@ -81,7 +83,9 @@ Describe 'Generator (dev tree only)' {
 
 Describe 'Healthy-box behavior (both apps present)' {
     BeforeAll {
-        $tool = Join-Path $PSScriptRoot '..\dist\Repair-MsStoreApp.ps1'
+        $dist = Join-Path $PSScriptRoot '..\dist\Repair-MsStoreApp.ps1'
+        $flat = Join-Path $PSScriptRoot '..\Repair-MsStoreApp.ps1'
+        $tool = if (Test-Path $dist) { $dist } else { $flat }
     }
 
     It '-DetectOnly exits 0 and reports healthy' {

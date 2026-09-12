@@ -95,6 +95,35 @@ There are no aka.ms permalinks for the other frameworks. For those, use the
 repair script below, which fetches any missing framework from Microsoft's own
 update channel at run time.
 
+## Intune remediation pair
+
+`detection.ps1` + `remediation.ps1` generalize the manual fix to any modern
+app, as an Intune remediation (or any script runner):
+
+```text
+detection.ps1   scans every non-framework package registered for the signed-in
+                user: unhealthy Status, or manifest-declared components that
+                are missing / below the manifest's minimum version.
+                Exit 0 healthy, 1 broken found.
+remediation.ps1 same scan, then the no-download repair ladder: re-register
+                app + components from staged files, Microsoft permalink for a
+                missing VCLibs UWPDesktop, then re-check.
+                Exit 0 repaired/healthy, 1 still broken (escalate to
+                "The one-command option" for the download path).
+```
+
+Requirements: run in the **signed-in user's context** (Intune: "Run this
+script using the logged on credentials") - AppX registration is per-user and
+SYSTEM has no user profile to inspect. Optional `-FamilyName` parameter
+restricts the scan to specific apps (e.g. the two shortcut apps). Detail log:
+`%TEMP%\store-app-repair-remediation.log`.
+
+Scan coverage notes: missing apps cannot be detected generically (nothing
+defines what should be installed - use the one-command option for named
+apps); framework packages are only evaluated through their dependents; the
+version floor is checked against the best-installed copy of a component
+(frameworks register per-architecture).
+
 ## Blast radius
 
 Per-user app state lives in `%LOCALAPPDATA%\Packages\<PackageFamilyName>`:
