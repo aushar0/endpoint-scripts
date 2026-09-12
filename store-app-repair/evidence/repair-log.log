@@ -1,0 +1,8 @@
+﻿<![LOG[Repair run. User: testuser. Mode: repair.]LOG]!><time="21:52:34.531-0500" date="09-11-2026" component="StoreAppRepair" context="" type="1" thread="18452" file="Repair-MsStoreApp.ps1">
+<![LOG[log=%TEMP%\MsStoreRepair\Microsoft_StoreAppRepair_Repair_20260911-215234.log]LOG]!><time="21:52:34.558-0500" date="09-11-2026" component="StoreAppRepair" context="" type="1" thread="18452" file="Repair-MsStoreApp.ps1">
+<![LOG[Running as DESKTOP\testuser. Elevated: False. System: False. Console user: .]LOG]!><time="21:52:34.576-0500" date="09-11-2026" component="StoreAppRepair" context="" type="1" thread="18452" file="Repair-MsStoreApp.ps1">
+<![LOG[unknown app 'nosuchapp' known=snip,calc]LOG]!><time="21:52:34.590-0500" date="09-11-2026" component="StoreAppRepair" context="" type="3" thread="18452" file="Repair-MsStoreApp.ps1">
+<![LOG[Repair run. User: testuser. Mode: repair.]LOG]!><time="21:52:34.942-0500" date="09-11-2026" component="StoreAppRepair" context="" type="1" thread="31928" file="Repair-MsStoreApp.ps1">
+<![LOG[log=%TEMP%\MsStoreRepair\Microsoft_StoreAppRepair_Repair_20260911-215234.log]LOG]!><time="21:52:34.957-0500" date="09-11-2026" component="StoreAppRepair" context="" type="1" thread="31928" file="Repair-MsStoreApp.ps1">
+<![LOG[Running as DESKTOP\testuser. Elevated: False. System: False. Console user: .]LOG]!><time="21:52:34.968-0500" date="09-11-2026" component="StoreAppRepair" context="" type="1" thread="31928" file="Repair-MsStoreApp.ps1">
+<![LOG[-ProductId requires -ExpectedFamilyName (catalog fuzzy-matches typo IDs to unrelated apps)]LOG]!><time="21:52:34.973-0500" date="09-11-2026" component="StoreAppRepair" context="" type="3" thread="31928" file="Repair-MsStoreApp.ps1">

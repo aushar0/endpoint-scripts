@@ -11,16 +11,19 @@ and the error persists.
 
 ## Why the winget reinstall didn't fix it
 
-`winget uninstall` + `winget install` replaces only the app's registration. It never
-touches the framework packages the app depends on (VCLibs, UI.Xaml, .NET Native,
-WindowsAppRuntime) and never resets the user's app state. Both survive the
-reinstall, so if either is what's broken, the error survives too. Windows also
+`winget uninstall` + `winget install` replaces the app's registration and removes
+its data folder (re-created empty on reinstall). It never touches the framework
+packages the app depends on (VCLibs, UI.Xaml, .NET Native, WindowsAppRuntime) -
+those survive the reinstall. So if a framework is what's broken, the error
+survives too. And if the app's own data was the problem, the winget cycle already
+fixed it - persistence of the error after a reinstall points at the frameworks or
+at something outside the app entirely. Windows also
 refuses to remove a framework while apps still depend on it (`0x80073CF3` on
 remove, listing the dependents), so "app present but broken" usually means a
 corrupt registration, a per-user registration gap, or a version floor the installed
 framework no longer meets - not a cleanly removed dependency.
 
-## The 30-second manual fix (run as the affected user, NO admin required)
+## The manual fix (standard user, no admin required)
 
 **Step 1 - read the real error.** The dialog is generic; the actual failure is in
 the event logs. Event 628 in AppxDeployment-Server names a missing framework
@@ -102,7 +105,7 @@ settings, history, sign-in state, app caches. What each step touches:
 | Step 2 re-register | Registration only | No. App data untouched; safe while apps run (in-use frameworks SKIP). |
 | Step 3 `Reset-AppxPackage` | That one app's per-user data | Yes - resets Calculator history/modes, Snipping Tool preferences, stored sign-in for that app. |
 | Repair script | Installs / re-registers the package | No - never removes or resets; worst case is `RESULT FAIL` + exit code. |
-| winget uninstall/reinstall | The app registration | No - uninstall leaves the data container on disk and reinstall re-attaches it (why corrupted state survives the dance). |
+| winget uninstall/reinstall | The registration and the app's data folder | The data folder is removed and re-created empty; frameworks are untouched. |
 
 Nothing here touches user documents, files saved outside the app container
 (e.g. Pictures\Screenshots), other apps, or Windows itself. If Step 3 is
@@ -113,7 +116,7 @@ first:
 Copy-Item "$env:LOCALAPPDATA\Packages\Microsoft.WindowsCalculator_8wekyb3d8bbwe" "$env:TEMP\calc-state-backup" -Recurse
 ```
 
-## The one-command option: Repair-MsStoreApp.ps1
+## The one-command option
 
 Single self-contained file, no dependencies, nothing pre-staged. At run time it
 pulls fresh signed URLs from Microsoft's anonymous update channel (the same
@@ -143,8 +146,7 @@ Behavior details that matter in the field:
   reachability checks, per-app status ("Calculator healthy: version ...
   registered, all required components present"), each action taken, and a
   one-line `SUMMARY:` for the case record. A full timestamped log lands in
-  `%TEMP%\MsStoreRepair\<stamp>_<user>_<mode>.log`. Spell words out; no
-  shorthand.
+  `%TEMP%\MsStoreRepair\<stamp>_<user>_<mode>.log`.
 - **Idempotent.** App registered at any version = "nothing to do", exit 0.
 - **Staged-but-unregistered is detected and repaired with zero download** when
   elevated: after an uninstall the package often remains staged machine-wide; the
@@ -215,29 +217,54 @@ version the Store pushed meanwhile - re-running the original winget install
 (or the Store) restores the current public version. There is no downgrade
 path: the OS refuses version downgrades by design (0x80073D06).
 
-## Verification status (2026-09-11, Windows 11 26200)
+## Testing
 
-Live-tested end to end on a daily-driver box: full remove -> repair cycles for
-both apps in a standard-user session (runtime fetch, 8 files, all SHA-1 digests
-matched, all Authenticode-valid Microsoft-signed, CF3 ladder fired both times);
-detection contract both ways (`RESULT` + exit 0/1); re-register ladder verbatim
-including the expected `0x80073D02` in-use skips (logged, classified SKIP);
-elevated staged fast-path repair with no download; Store blocked via hosts to
-reproduce a no-winget environment (`12007`/`0x80072ee7`) with the repair channel
-still working; `Add-AppxPackage -Path <URL>` downloads direct from the aka.ms
-permalink (fails `0x80073D06` only when a newer version is already installed,
-which is correct). Framework-removal guard verified: the OS refuses to remove a
-framework with registered dependents (`0x80073CF3` on remove), so the
-framework-missing state was reachable only via the staged/unregistered path.
+`tests/Repair-MsStoreApp.Tests.ps1` - 13 Pester tests covering the static
+contract (parse, comment-based help, CMTrace log format, family-name pins,
+regression tokens), healthy-box behavior (detect and no-op exit codes,
+SUMMARY line, CMTrace log file), and error paths (unknown app, unpinned
+ProductId). Paths resolve relative to the test file; the suite runs on any
+clone.
 
-Not live-tested (named, not hidden): the SYSTEM branch of the repair script
-(`Add-AppxProvisionedPackage` + one-shot scheduled-task console-user handoff) -
-implemented per the documented DISM lane, awaiting an elevated run; real
-state-corruption could not be reproduced (Calculator tolerated a damaged state
-folder), so `Reset-AppxPackage` is verified as a cmdlet, not against a
-reproduced corruption.
+```powershell
+Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser -Force -SkipPublisherCheck
+Invoke-Pester -Path tests/
+```
 
-Sources: protocol basis is the anonymous FE3 update channel (same as
-store.rg-adguard.net, ported from the open-source StoreLib envelopes); the
-staged/missing-framework failure class and the DISM provision lane are documented
-field experience from the call4cloud "missing frameworks" writeup.
+## Verification status (2026-09-11, Windows 11 26200, single machine)
+
+Design is field-shaped; validation to date is lab-grade, on one daily-driver
+machine. Raw artifacts in `evidence/`.
+
+| Verified live | Evidence |
+|---|---|
+| Full remove -> repair cycles, both apps, standard-user session (fetch, 8 files, SHA-1 digests matched, signatures valid, dependency ladder fired) | `evidence/repair-log.log` (CMTrace) |
+| Detection contract both ways (exit 0 present / 1 missing) | `evidence/pester-run.txt` |
+| Re-register ladder verbatim, including in-use skips (0x80073D02 classified SKIP) | same log |
+| Elevated staged fast-path repair, zero download | this session, pre-v3.1 tool |
+| Store blocked via hosts: winget fails 12007/0x80072ee7, repair channel unaffected | this session |
+| `Add-AppxPackage -Path <URL>` from the aka.ms VCLibs permalink | fails 0x80073D06 only when a newer version is already installed (correct) |
+| Framework-removal guard: OS refuses removal with dependents (0x80073CF3) | this session |
+
+| Not yet verified | Status |
+|---|---|
+| SYSTEM branch (provision + console-user handoff) | Implemented per the documented DISM lane; the script emits a loud WARN when the path runs; awaiting one elevated run |
+| Real state corruption | Could not be reproduced (the app tolerated a damaged state folder); `Reset-AppxPackage` verified as a cmdlet only |
+| Cross-build (Win10 22H2/24H2), multi-user, fleet scale | Pending |
+
+## Known limitations
+
+- No concurrency guard: two runs at once (management service + user) can race.
+- The DNS reachability probe has no timeout on name resolution.
+- The dependency-ladder's standalone rung installs frameworks without checking
+  the manifest's minimum-version floor (the diagnosis path does check it).
+- The SYSTEM scheduled-task handoff pattern is environment-sensitive; treat it
+  as single-build until cross-build tested.
+
+## Sources
+
+- Store-app fetch protocol: Microsoft's anonymous FE3 update channel (the same
+  channel store.rg-adguard.net fronts; ported from the open-source StoreLib
+  envelopes).
+- The staged/missing-framework failure class and the DISM provision lane:
+  documented field experience from the call4cloud "missing frameworks" writeup.

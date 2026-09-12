@@ -1,0 +1,1 @@
+﻿Pester 5.7.1 - store-app-repair regression suite - Passed: 14  Failed: 0  Skipped: 0 - Windows 11 build 26200, PowerShell 5.1 - 2026-09-11 - usernames and local paths redacted in repair-log.log

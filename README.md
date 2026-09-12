@@ -1,10 +1,10 @@
 # endpoint-scripts
 
-> Windows endpoint engineering kits — detect, classify, and remediate driver faults
-> **without disturbing a single user.**
+> Windows endpoint engineering kits — diagnostics, repair, and deployment.
+> Every kit carries its own tests, evidence, and revert path.
 
 ![Platform](https://img.shields.io/badge/Platform-Windows%2011-lightgrey)
-![Intune](https://img.shields.io/badge/Intune-Win32%20%7C%20Remediations-0078D4)
+![Enterprise](https://img.shields.io/badge/Enterprise-ConfigMgr%20%7C%20Intune%20%7C%20RMM-0078D4)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
 
 A home for self-contained endpoint engineering kits. Each kit is independent —
@@ -81,5 +81,5 @@ on a live machine before shipping, including the no-Store reproduction
 
 ## License
 
-Kit scripts: license not yet declared. Bundled components carry their own
-licenses (see each kit's credits).
+Kit scripts: [MIT](LICENSE). Bundled components carry their own licenses
+(see each kit's credits).

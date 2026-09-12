@@ -14,7 +14,7 @@
 
     GENERATED FILE - do not hand-edit; regenerate with
     New-MsStoreRepairScript.ps1. Embedded fetcher:
-    Get-MsStorePackageLink.ps1 (SHA-256 D8815934B61B3CB1EEE168F217E10729C6AD081925017E83101D1F3C27BFB824). Generated: 2026-09-11 16:15.
+    Get-MsStorePackageLink.ps1 (SHA-256 D8815934B61B3CB1EEE168F217E10729C6AD081925017E83101D1F3C27BFB824). Generated: 2026-09-11 21:55.
 
 .PARAMETER App
     App shortcut(s): 'calc', 'snip', comma-separated ('calc,snip') or repeated.
@@ -50,7 +50,7 @@
     Repair any free Store app by pinned ProductId.
 
 .NOTES
-    Version:   3.1.0
+    Version:   3.2.0
     Author:    aushar0
     Exit codes 0 repaired/present, 1 input/pin/missing (DetectOnly),
     2 fetch failure, 3 signature failure, 4 install failure.
@@ -287,6 +287,7 @@ Write-Log 'INFO' ("{0} missing. Fetching from the Microsoft update channel ({1})
             # SYSTEM: no per-user appx (no profile; no -AllUsers on this cmdlet
             # set). Provision machine-wide, then per-user install for the
             # console user via one-shot scheduled task (no password from SYSTEM).
+            Write-Log 'WARN' "SYSTEM branch: provision path implemented per the documented DISM lane; not yet validated on a managed device."
             Write-Log 'INFO' ("SYSTEM context: provisioning {0} machine-wide." -f $title)
             try {
                 $prov = @{ Online = $true; Path = $main.FullName; SkipLicense = $true }
