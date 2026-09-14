@@ -36,6 +36,8 @@ Param (
     [string]$DeployMode = 'Silent',
     [switch]$AllowRebootPassThru,
     [switch]$TerminalServerMode,
+    # launches the app to prove activation works; closes it when Silent
+    [switch]$VerifyLaunch,
     [switch]$DisableLogging
 )
 
@@ -121,6 +123,101 @@ function Test-AppxRegistered {
     return $null
 }
 
+function Test-AppxLaunch {
+    # Launches the app in the user session and verifies activation:
+    # process present + a TWinUI 'completed successfully' event newer than
+    # the launch. Returns a result object; never throws.
+    param([object]$Package, [switch]$Close)
+    $result = @{ OK = $false; Detail = '' }
+    try {
+        $manifest = Get-AppxPackageManifest -Package $Package -ErrorAction Stop
+        $appId = $manifest.Package.Applications.Application.Id | Select-Object -First 1
+        $exe = ($manifest.Package.Applications.Application | Where-Object { $_.Id -eq $appId }).Executable
+        $procName = [IO.Path]::GetFileNameWithoutExtension($exe)
+        $aumid = "$($Package.PackageFamilyName)!$appId"
+        $since = Get-Date
+
+        Start-Process -FilePath "$env:WINDIR\explorer.exe" -ArgumentList "shell:AppsFolder\$aumid"
+
+        $sawProcess = $false
+        $waited = 0
+        while ($waited -lt 20) {
+            Start-Sleep -Seconds 2; $waited += 2
+            if (Get-Process -Name $procName -ErrorAction SilentlyContinue) { $sawProcess = $true; break }
+        }
+        Start-Sleep -Seconds 2
+
+        $twin = @()
+        try {
+            $twin = @(Get-WinEvent -LogName 'Microsoft-Windows-TwinUI/Operational' -MaxEvents 20 -ErrorAction Stop |
+                Where-Object { $_.TimeCreated -ge $since -and $_.Message -match [regex]::Escape($Package.PackageFamilyName) })
+        } catch { }
+
+        $okEvent = @($twin | Where-Object Message -match 'completed successfully')
+        $failEvent = @($twin | Where-Object Message -notmatch 'completed successfully')
+
+        if ($sawProcess) {
+            $result.OK = $true
+            $result.Detail = "process $procName running$($(if ($okEvent.Count) { '; activation logged successful' } else { '' }))$($(if ($failEvent.Count) { '; ' + $failEvent.Count + ' failure event(s)' } else { '' }))"
+        }
+        elseif ($failEvent.Count) {
+            $result.Detail = "no $procName process; activation failure logged: $(($failEvent[0].Message -split "`n")[0].Trim())"
+        }
+        else {
+            $result.Detail = "no $procName process and no activation events within 20s"
+        }
+
+        if ($Close -and $procName) {
+            Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
+            $result.Detail += ' (closed)'
+        }
+    }
+    catch {
+        $result.Detail = "launch check failed: $($_.Exception.Message)"
+    }
+    return $result
+}
+
+function Write-AppxEventExport {
+    # Troubleshooting export: recent activation/deployment events for the app
+    # written into the PSADT log (his ask - the deployment log carries the
+    # evidence). $since limits to fresh events when provided.
+    param([object]$Package, [datetime]$Since)
+    foreach ($logName in 'Microsoft-Windows-TwinUI/Operational', 'Microsoft-Windows-AppxDeploymentServer/Operational') {
+        try {
+            $events = @(Get-WinEvent -LogName $logName -MaxEvents 100 -ErrorAction Stop |
+                Where-Object { $_.Message -match [regex]::Escape($Package.Name) -and (-not $Since -or $_.TimeCreated -ge $Since) } |
+                Select-Object -First 5)
+            foreach ($e in $events) {
+                $first = ($e.Message -split "`n")[0].Trim()
+                Write-Log -Message ("[EVT] {0} id={1} at={2}: {3}" -f ($logName -split '/')[-1], $e.Id, $e.TimeCreated, $first) -Source $deployAppScriptFriendlyName
+            }
+        } catch { }
+    }
+}
+
+function Invoke-LaunchVerification {
+    # DeployMode-aware: Interactive pops the app and leaves it; Silent skips
+    # unless -VerifyLaunch (launch, verify, close). Always exports events.
+    param([object]$Package)
+    If ($DeployMode -ne 'Silent' -or $VerifyLaunch) {
+        Write-Log -Message "Launch check: starting $($Package.Name)..." -Source $deployAppScriptFriendlyName
+        $since = Get-Date
+        $lr = Test-AppxLaunch -Package $Package -Close:($DeployMode -eq 'Silent')
+        If ($lr.OK) {
+            Write-Log -Message ("Launch verified: {0}{1}" -f $lr.Detail, $(if ($DeployMode -ne 'Silent') { ' - left open for review' })) -Source $deployAppScriptFriendlyName
+        }
+        Else {
+            Write-Log -Message ("Launch check FAILED: {0}" -f $lr.Detail) -Severity 3 -Source $deployAppScriptFriendlyName
+        }
+        Write-AppxEventExport -Package $Package -Since $since
+    }
+    Else {
+        Write-AppxEventExport -Package $Package
+        Write-Log -Message "Launch check skipped (Silent mode; use -DeployMode Interactive or -VerifyLaunch to launch-verify). Recent app events exported above if any." -Source $deployAppScriptFriendlyName
+    }
+}
+
 If ($deploymentType -ine 'Uninstall' -and $deploymentType -ine 'Repair') {
     ##*===============================================
     ##* PRE-INSTALLATION
@@ -162,6 +259,7 @@ If ($deploymentType -ine 'Uninstall' -and $deploymentType -ine 'Repair') {
         Write-Log -Message "Calculator $($registered.Version) already registered - nothing to do." -Source $deployAppScriptFriendlyName
         ## <Perform Post-Installation tasks here>
         Show-InstallationProgress
+        Invoke-LaunchVerification -Package $registered
         Exit-Script -ExitCode $mainExitCode
     }
 
@@ -272,6 +370,13 @@ If ($deploymentType -ine 'Uninstall' -and $deploymentType -ine 'Repair') {
     }
     Else {
         Write-Log -Message "Calculator not yet registered for this user - provisioning covers registration." -Severity 2 -Source $deployAppScriptFriendlyName
+    }
+
+    ## Launch verification: Interactive pops the app up and leaves it for the
+    ## technician; Silent never pops anything unless -VerifyLaunch is set.
+    ## Recent activation/deployment events are exported into the PSADT log.
+    If ($post) {
+        Invoke-LaunchVerification -Package $post
     }
 }
 ElseIf ($deploymentType -ieq 'Uninstall') {
