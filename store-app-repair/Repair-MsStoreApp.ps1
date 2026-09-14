@@ -14,7 +14,7 @@
 
     GENERATED FILE - do not hand-edit; regenerate with
     New-MsStoreRepairScript.ps1. Embedded fetcher:
-    Get-MsStorePackageLink.ps1 (SHA-256 D8815934B61B3CB1EEE168F217E10729C6AD081925017E83101D1F3C27BFB824). Generated: 2026-09-11 23:54.
+    Get-MsStorePackageLink.ps1 (SHA-256 D8815934B61B3CB1EEE168F217E10729C6AD081925017E83101D1F3C27BFB824). Generated: 2026-09-14 12:09.
 
 .PARAMETER App
     App shortcut(s): 'calc', 'snip', comma-separated ('calc,snip') or repeated.
@@ -50,7 +50,7 @@
     Repair any free Store app by pinned ProductId.
 
 .NOTES
-    Version:   3.2.2
+    Version:   3.2.3
     Author:    aushar0
     Exit codes 0 repaired/present, 1 input/pin/missing (DetectOnly),
     2 fetch failure, 3 signature failure, 4 install failure.
@@ -338,7 +338,7 @@ Write-Log 'INFO' ("{0} missing. Fetching from the Microsoft update channel ({1})
                 $runVbs = Join-Path $publicDir 'run_hidden.vbs'
                 # [char]34 = double quote; avoids tripled-quote escapes entirely
                 $q = [char]34
-                $vbsLine = 'CreateObject("Wscript.Shell").Run ' + $q + 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ' + $q + $q + $handoffPs1 + $q + $q + ', 0, True'
+                $vbsLine = 'CreateObject("Wscript.Shell").Run ' + $q + 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ' + $q + $q + $handoffPs1 + $q + $q + $q + ', 0, True'
                 Set-Content -Path $runVbs -Value $vbsLine -Encoding ascii
                 $action  = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ($q + $runVbs + $q)
                 $tn = "MsStoreRepair-$pkgName-$stamp"
@@ -439,5 +439,13 @@ $actionWords = switch -Wildcard ($raAction) {
     default                       { "$raAction." }
 }
 Write-Log 'INFO' ("SUMMARY: {0} $actionWords" -f ($story -join ' | '))
-Write-Log 'INFO' ("Done. Exit code {0}. Full log: {1}" -f $overall, $LogFile)
+$exitWord = switch ($overall) {
+    0 { 'Success' }
+    1 { 'Missing or input error' }
+    2 { 'Download failed' }
+    3 { 'Signature check failed' }
+    4 { 'Install failed' }
+    default { 'See log' }
+}
+Write-Log 'INFO' ("Done. Exit code {0} - {1}. Full log: {2}" -f $overall, $exitWord, $LogFile)
 [environment]::Exit($overall)
