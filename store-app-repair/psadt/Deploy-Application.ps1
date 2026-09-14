@@ -218,6 +218,28 @@ function Invoke-LaunchVerification {
     }
 }
 
+function Get-FailureDiagnosis {
+    # Failure taxonomy: specific cause per HRESULT/error class. Unknown
+    # errors keep their full text - the taxonomy narrows, it never hides.
+    param($Exception)
+    $e = "$($Exception)"
+    switch -Regex ($e) {
+        '0x80073D02' { return 'files in use by running apps (close the listed apps or retry later)' }
+        '0x80073D06' { return 'a newer version is already registered (healthy state)' }
+        '0x80073CF3' { return 'dependency conflict: components in a different state than required' }
+        '0x80070005|Access is denied|UnauthorizedAccess' { return 'access denied - file ACLs, security software, or wrong context' }
+        '0x80072EE7|12007' { return 'name resolution failed - endpoint blocked by DNS, hosts file, VPN, or proxy' }
+        '0x80072EFD|0x80072F8F|timeout|timed out' { return 'network unreachable or TLS blocked' }
+        '0x80070424|service cannot be started' { return 'a required Windows service is not running' }
+        '0x80073CF9' { return 'install rejected - possibly missing entitlement/license for this app' }
+        '0x80070003|does not exist' { return 'path not found - the staged file is missing from the package' }
+        '0x80070070' { return 'disk full' }
+    }
+    $h = $Exception.Exception.HResult
+    if ($h -and $h -ne 0) { return "HRESULT 0x{0:X8}: {1}" -f $h, $e }
+    return $e
+}
+
 If ($deploymentType -ine 'Uninstall' -and $deploymentType -ine 'Repair') {
     ##*===============================================
     ##* PRE-INSTALLATION
@@ -271,7 +293,13 @@ If ($deploymentType -ine 'Uninstall' -and $deploymentType -ine 'Repair') {
         $prov = @{ Online = $true; PackagePath = $mainAppx.FullName; SkipLicense = $true }
         If ($depAppx.Count) { $prov.DependencyPackagePath = $depAppx.FullName }
         Write-Log -Message "SYSTEM context: provisioning Calculator machine-wide." -Source $deployAppScriptFriendlyName
-        Add-AppxProvisionedPackage @prov | Out-Null
+        try {
+            Add-AppxProvisionedPackage @prov -ErrorAction Stop | Out-Null
+        }
+        catch {
+            Write-Log -Message ("PROVISION FAILED: {0}" -f (Get-FailureDiagnosis $_)) -Severity 3 -Source $deployAppScriptFriendlyName
+            Exit-Script -ExitCode 1
+        }
         Write-Log -Message "Provisioning completed - Windows registers users within minutes (AppReadiness) and at first logon." -Source $deployAppScriptFriendlyName
 
         ## Immediate silent registration for the signed-in console user via the
@@ -303,7 +331,13 @@ If ($deploymentType -ine 'Uninstall' -and $deploymentType -ine 'Repair') {
                 "if (`$err) { exit 1 } else { exit 0 }"
             )
             Set-Content -Path $handoffPs1 -Value $handoffLines -Encoding utf8
-            $rc = Execute-ProcessAsUser -Path "$PSHOME\powershell.exe" -Parameters "-NoProfile -ExecutionPolicy Bypass -File `"$handoffPs1`"" -Wait -PassThru -RunLevel 'LeastPrivilege' -TempPath $publicDir
+            try {
+                $rc = Execute-ProcessAsUser -Path "$PSHOME\powershell.exe" -Parameters "-NoProfile -ExecutionPolicy Bypass -File `"$handoffPs1`"" -Wait -PassThru -RunLevel 'LeastPrivilege' -TempPath $publicDir -ErrorAction Stop
+            }
+            catch {
+                Write-Log -Message ("HANDOFF FAILED: {0}" -f (Get-FailureDiagnosis $_)) -Severity 3 -Source $deployAppScriptFriendlyName
+                $rc = 1
+            }
             Remove-Item $publicDir -Recurse -Force -ErrorAction SilentlyContinue
             # outcome witness: the task plumbing can pass back quirky codes
             # (-196608 observed on success) - registration is the verdict
@@ -327,13 +361,20 @@ If ($deploymentType -ine 'Uninstall' -and $deploymentType -ine 'Repair') {
         }
         If ($staged) {
             Write-Log -Message "Staged copy found - re-registering without download." -Source $deployAppScriptFriendlyName
-            Add-AppxPackage -Path (Join-Path $staged.InstallLocation 'AppxManifest.xml') -Register -DisableDevelopmentMode -ErrorAction Stop
+            try {
+                Add-AppxPackage -Path (Join-Path $staged.InstallLocation 'AppxManifest.xml') -Register -DisableDevelopmentMode -ErrorAction Stop
+            }
+            catch {
+                # fall through to the full ladder - the log carries the cause
+                Write-Log -Message "Staged re-register failed: $(Get-FailureDiagnosis $_)" -Severity 2 -Source $deployAppScriptFriendlyName
+            }
         }
         Else {
             ## Dependency retry ladder: full set -> bare -> components then bare.
             ## Machines already satisfying part of the graph reject the full
             ## set with 0x80073CF3 ("provided but not used").
             Write-Log -Message "Installing Calculator + $($depAppx.Count) component(s) for this user." -Source $deployAppScriptFriendlyName
+            try {
             Try {
                 Add-AppxPackage -Path $mainAppx.FullName -DependencyPath $depAppx.FullName -ErrorAction Stop
             }
@@ -346,10 +387,17 @@ If ($deploymentType -ine 'Uninstall' -and $deploymentType -ine 'Repair') {
                 Catch {
                     If ($_.Exception.Message -notmatch '0x80073CF3') { Throw }
                     foreach ($d in $depAppx) {
-                        Try { Add-AppxPackage -Path $d.FullName -ErrorAction Stop } Catch { Write-Log -Message "Component $($d.Name): $($_.Exception.Message)" -Severity 2 -Source $deployAppScriptFriendlyName }
+                        Try { Add-AppxPackage -Path $d.FullName -ErrorAction Stop } Catch { Write-Log -Message "Component $($d.Name): $(Get-FailureDiagnosis $_)" -Severity 2 -Source $deployAppScriptFriendlyName }
                     }
                     Add-AppxPackage -Path $mainAppx.FullName -ErrorAction Stop
                 }
+            }
+            }
+            catch {
+                # non-CF3 failures (access denied, missing file, disk full...)
+                # are diagnosed and logged - never a silent script death
+                Write-Log -Message ("INSTALL FAILED: {0}" -f (Get-FailureDiagnosis $_)) -Severity 3 -Source $deployAppScriptFriendlyName
+                Exit-Script -ExitCode 1
             }
         }
     }
