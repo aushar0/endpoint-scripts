@@ -1,6 +1,6 @@
 <#
 REMEDIATION: fixes everything the paired detection flags, in one run.
-  Services -> Delayed-Auto (exact names matter; Manual/Disabled are SKIPPED,
+  CLConfigService -> Delayed-Auto (exact names matter; Manual/Disabled are SKIPPED,
   never resurrected; active dependents skip; verify after apply).
   clabp Run entry -> StartupApproved disable flag (03). Value left in place on
   purpose (writer service checks existence only). Reversible (flip to 02).
@@ -17,7 +17,7 @@ function Get-SvcState($name) {
     if ($s) { "StartMode=$($s.StartMode) DelayedAutoStart=$($s.DelayedAutoStart)" } else { 'not-present' }
 }
 
-foreach ($svcName in @('CLConfigService','CsGMMuteSrv')) {
+foreach ($svcName in @('CLConfigService')) {
   try {
     $svc = Get-CimInstance Win32_Service -Filter "Name='$svcName'" -ErrorAction SilentlyContinue
     if (-not $svc) { $detail += "[svc] $svcName : not present - nothing to do"; continue }

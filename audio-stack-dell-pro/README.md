@@ -12,7 +12,7 @@ package's own binaries, INFs, and MSI tables.
 
 ## Why this kit exists
 
-The stack installs two auto-start services and a machine-wide Run entry
+The stack installs auto-start services and a machine-wide Run entry
 (`clabp`) that launches a .NET companion process at every logon. Users get no
 visible feature from that launch. Two properties of the vendor design shape
 the whole kit:
@@ -23,12 +23,12 @@ the whole kit:
    `StartupApproved\Run` flag Task Manager uses - is honored at logon and is
    *not* re-enabled by the writer, because the writer only checks that the
    value exists. Flag, don't delete.
-2. **Deferring the services is safe and useful.** Neither service gates boot:
-   CLConfigService applies audio-processing config, CsGMMuteSrv drives the
-   hardware mic-mute key/LED (F4). Delayed-Auto keeps both fully functional
-   while removing them from the boot-critical window. Note the mute key may
-   be unresponsive for the first couple of minutes after boot - that is the
-   one user-visible trade.
+2. **Deferring CLConfigService is safe and useful.** It applies
+   audio-processing configuration; nothing at boot depends on it, so
+   Delayed-Auto removes it from the boot-critical window with no visible
+   effect. The hardware mic-mute service (CsGMMuteSrv) is deliberately NOT
+   deferred: it is a hotkey/LED handler with negligible start cost, and
+   delaying it would only make the mute key unresponsive early after boot.
 
 ## The one policy
 
@@ -41,11 +41,11 @@ equally as a Nexthink remote-action payload.
 
 ## Design decisions worth knowing
 
-- **Exact names, exact spellings.** `CsGMMuteSrv` is the service name (the
-  binary's original filename is `CsGMMuteSvc.exe`). A near-miss name does not
-  error - the remediation silently skips while detection keeps flagging the
-  real service: an infinite remediation loop that reports success. Proven in
-  a lab VM; the test log ships in the kit's source workspace.
+- **Exact names, exact spellings.** A near-miss service name does not error -
+  the remediation silently skips while detection keeps flagging the real
+  service: an infinite remediation loop that reports success. Proven in a lab
+  VM (the original two-service form's `CsMuteSrv` typo); test log ships in the
+  kit's source workspace.
 - **Manual/Disabled means compliant-and-untouchable.** A remediation that
   flips a Manual service back to Auto (delayed) resurrects things other
   tooling deliberately turned off. If your policy is "delayed-auto is the

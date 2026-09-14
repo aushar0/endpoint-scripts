@@ -1,8 +1,11 @@
 <#
 DETECTION (Intune remediation / Nexthink RA compatible)
 One policy, both levers of the Cirrus audio stack boot cost:
-  1. Services CLConfigService + CsGMMuteSrv must be Delayed-Auto
-     (Manual/Disabled = compliant, left untouched by design; absent = N/A).
+  1. Service CLConfigService (APO config, binary EnhanceCS.exe) must be
+     Delayed-Auto (Manual/Disabled = compliant, untouched by design; absent = N/A).
+     The hardware mic-mute service (CsGMMuteSrv) is deliberately NOT targeted:
+     it is a hotkey/LED handler with negligible start cost, and deferring it
+     only delays the mute key after boot.
   2. The "clabp" Run entry (logon companion process) must be flagged disabled
      via StartupApproved (absent = N/A).
 Exit codes: 0 = compliant/N-A, 1 = remediate.
@@ -13,7 +16,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $issues = @(); $okItems = @(); $notes = @(); $detail = @()
 $anyService = $false
 
-foreach ($svcName in @('CLConfigService','CsGMMuteSrv')) {
+foreach ($svcName in @('CLConfigService')) {
     $svc = Get-CimInstance Win32_Service -Filter "Name='$svcName'"
     if (-not $svc) { $detail += "[svc] $svcName : not present"; continue }
     $anyService = $true
