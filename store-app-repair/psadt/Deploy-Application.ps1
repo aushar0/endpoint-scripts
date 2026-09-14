@@ -246,6 +246,23 @@ If ($deploymentType -ine 'Uninstall' -and $deploymentType -ine 'Repair') {
     ##*===============================================
     [String]$installPhase = 'Pre-Installation'
 
+    ## Record exactly what ran: this process's full command line, its parent
+    ## (what launched it - SCCM client, PsExec, a user's console), and the
+    ## working directory. The exit code at the end of the log is meaningless
+    ## without this at the start.
+    $myProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessID = $PID" -ErrorAction SilentlyContinue
+    $parentProcess = $null
+    If ($myProcess -and $myProcess.ParentProcessId) {
+        $parentProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessID = $($myProcess.ParentProcessId)" -ErrorAction SilentlyContinue
+    }
+    Write-Log -Message "Invocation: $($myProcess.CommandLine)" -Source $deployAppScriptFriendlyName
+    If ($parentProcess) {
+        $parentCmd = $parentProcess.CommandLine
+        If ($parentCmd -and $parentCmd.Length -gt 400) { $parentCmd = $parentCmd.Substring(0, 400) + ' [...]' }
+        Write-Log -Message "Invoked by: $($parentProcess.Name) [$parentCmd]" -Source $deployAppScriptFriendlyName
+    }
+    Write-Log -Message "Working directory: $(Get-Location | Select-Object -ExpandProperty Path)" -Source $deployAppScriptFriendlyName
+
     ## Close Calculator if running (Silent mode closes without prompting)
     Show-InstallationWelcome -CloseApps 'CalculatorApp' -CloseAppsCountdown 60
 

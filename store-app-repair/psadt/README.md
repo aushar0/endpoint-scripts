@@ -45,6 +45,18 @@ Presence-idempotent: registered at any version = exit 0, nothing to do.
 
 Silent by design: no UAC, no windows, no dialogs in any context.
 
+## Troubleshooting and logs
+
+The log opens with the full invocation (exact command line, the parent
+process that launched the deployment, working directory, user context) and
+closes with the exit code paired with its named outcome - everything between
+is the story. Failures are diagnosed by taxonomy (access denied, DNS blocked,
+disk full, in-use, entitlement...) with the raw HRESULT preserved.
+
+Log locations: SYSTEM runs write to `C:\Windows\Logs\Software\`;
+standard-user runs fall back to `C:\ProgramData\Logs\Software\`
+(`StoreApps-Calculator_PSAppDeployToolkit_<type>.log`, CMTrace format).
+
 ## Verification (2026-09-11/14)
 
 Live-tested end to end: unelevated no-op / offline install / idempotent rerun;
