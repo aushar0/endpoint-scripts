@@ -30,16 +30,14 @@ the whole kit:
    be unresponsive for the first couple of minutes after boot - that is the
    one user-visible trade.
 
-## The two policies
+## The one policy
 
-| Folder | Does | Compliant means |
-|---|---|---|
-| `services-delayed-auto/` | CLConfigService + CsGMMuteSrv -> Delayed-Auto | Auto+delayed, OR any non-Auto state (Manual/Disabled left untouched by design), OR services absent (N/A) |
-| `startup-entry-disable/` | Write the `03` StartupApproved flag for `clabp` | Entry absent, or flagged disabled |
-
-Both pairs are Intune remediation-shaped (exit 0 = compliant, 1 = remediate;
-`key=value`-style output lines for report columns) and work equally as
-Nexthink remote-action payloads - same exit-code contract.
+`detection.ps1` + `remediation.ps1` - a single Intune remediation covering both
+levers. Detection collects every reason in one pass (services not delayed,
+startup entry enabled) and exits 1 with a combined report-column line;
+remediation fixes everything it can in one run and summarizes what it applied,
+skipped, and failed. Exit 0 = compliant/N-A, 1 = remediate/failed - works
+equally as a Nexthink remote-action payload.
 
 ## Design decisions worth knowing
 
@@ -62,16 +60,16 @@ Nexthink remote-action payloads - same exit-code contract.
 
 | What | Status |
 |---|---|
-| services pair: detect -> remediate -> re-detect loop (stub services, lab VM) | validated |
+| combined pair: all logic branches (stub services + stub Run entry, lab VM) | services loop + clabp loop validated individually; combined single-file form pending one staged probe |
 | services pair: name-typo loop + Manual-resurrection failure modes | reproduced (original), fixed (this kit), fix branch re-validated pending one staged probe |
 | startup pair: detect -> flag -> re-detect (byte-level flag check) | validated end-to-end |
 | startup pair: entry stays disabled across reboots with writer service running | validated on target hardware (n=1) |
 
 ## Usage (Intune)
 
-Create two remediations (Devices -> Remediations): each folder is one policy.
-Upload `detection.ps1` and `remediation.ps1`, run as SYSTEM, schedule as
-needed. On non-target hardware both detections exit 0 (N/A) by design.
+Create one remediation (Devices -> Remediations): upload `detection.ps1` and
+`remediation.ps1`, run as SYSTEM, schedule as needed. On non-target hardware
+detection exits 0 (N/A) by design.
 
 ## Credits
 

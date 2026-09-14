@@ -16,7 +16,7 @@ deploy it, and the evidence behind its claims.
 
 ### [audio-stack-dell-pro](audio-stack-dell-pro/)
 
-Two detection/remediation pairs that cut boot cost from the Cirrus audio stack
+One detection/remediation pair that cuts boot cost from the Cirrus audio stack
 on Dell Pro laptops: defer the vendor's background services, and disable its
 logon companion process the one way the vendor's own persistence mechanism
 cannot undo - Windows' native StartupApproved flag instead of deleting the Run
