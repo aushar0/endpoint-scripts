@@ -74,6 +74,18 @@ update channel at run time — no Store, no winget, nothing pre-staged.
 on a live machine before shipping, including the no-Store reproduction
 (hosts-blocked, winget dead, repair channel still working).*
 
+### [teams-autostart](teams-autostart/)
+
+Remove new Microsoft Teams from the logon path entirely — by disabling both of
+its autostart vectors the way Task Manager does, reversibly, with the boot A/B
+receipts to prove it. The case study also documents, with six tested attempts
+and screenshots, why the popular "just delay it instead" idea has no working
+mechanism (and why one launcher reports success while doing nothing).
+
+*Start with the [case study](teams-autostart/CASE_STUDY.md): one audit diff, one
+screenshot series, and the trap that turns a "successful" remediation into a
+silent no-op.*
+
 ## Conventions
 
 - One folder per kit; the kit's README is the front door.
