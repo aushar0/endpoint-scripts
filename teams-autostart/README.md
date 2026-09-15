@@ -8,7 +8,7 @@
 ![Intune](https://img.shields.io/badge/Intune-Remediations%20(user%20scope)-0078D4)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
 
-## What is this? (plain English)
+## What is this?
 
 When people sign in to Windows, Microsoft Teams starts by itself, quietly, and
 sits in the notification area (the tray, by the clock). On many machines that

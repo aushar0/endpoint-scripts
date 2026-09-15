@@ -213,7 +213,7 @@ Everything a run observes and does is recorded in four places:
 
 | Location | What it is |
 |---|---|
-| `C:\Windows\Logs\Software\...CameraStack...log` | The deployment log (PSADT) — a plain-English narrative, with problem codes translated to text |
+| `C:\Windows\Logs\Software\...CameraStack...log` | The deployment log (PSADT), with problem codes translated to text |
 | `C:\Windows\Logs\Software\<app>-<version>-<DeploymentType>\machine.log` | Machine-readable event lines (`key=value`), built for grep and fleet-wide analysis; the folder follows the per-package log convention |
 | `C:\Windows\Logs\Software\<app>-<version>-<DeploymentType>\run-<timestamp>.json` | One structured record per run (newest 20 kept): device inventories before and after, actions, timings, errors, exit code. `last_run.json` always mirrors the newest record as a stable path for tooling. |
 | stdout | The same machine lines, captured by Intune / Remediations reporting |

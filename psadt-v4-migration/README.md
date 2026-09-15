@@ -9,7 +9,7 @@
 ![PSAppDeployToolkit](https://img.shields.io/badge/PSAppDeployToolkit-4.1.8%20(v3%20compat)-8B1A1A)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%2F%207.4%2B-blue)
 
-## What is this? (plain English)
+## What is this?
 
 PSAppDeployToolkit 4.1.8 is the current stable release (January 2026). Its
 "v3 template" is a v4 engine with a v3 compatibility layer: your existing v3
