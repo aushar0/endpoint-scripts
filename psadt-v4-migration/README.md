@@ -21,19 +21,24 @@ This kit is two things:
 
 - the `template/` folder: the official
   [4.1.8 release](https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/tag/4.1.8)
-  asset `PSAppDeployToolkit_Template_v3.zip`, extracted and untouched — every
-  file hash-identical to the release,
+  asset `PSAppDeployToolkit_Template_v3.zip`, extracted and untouched, plus the
+  stock `Deploy-Application.ps1` from the
+  [3.10.1 release](https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/tag/3.10.1)
+  (`Toolkit\Deploy-Application.ps1`) dropped into the root — every file
+  hash-identical to its release zip, nothing modified,
 - this README: the migration map for the things the template deliberately
-  leaves to you (script, extensions, branding, log path).
+  leaves to you (extensions, branding, log path).
 
-The template was exercised end-to-end on a test machine: install, custom log
-path, and uninstall, all silent, 15/15 checks green (evidence below).
+The template was exercised end-to-end on a test machine exactly as shipped:
+the stock 3.10.1 script running install, repair, and uninstall silently under
+the 4.1.8 engine, plus a custom log path run — 13/13 checks green (evidence
+below).
 
 ## The four questions
 
 | You have (v3) | It goes (v4 compat template) | Notes |
 |---|---|---|
-| `Deploy-Application.ps1` | Package root, next to `Deploy-Application.exe` | The template ships no script; drop yours in. No edits required. |
+| `Deploy-Application.ps1` | Package root, next to `Deploy-Application.exe` | The template carries the stock 3.10.1 script — overwrite it with your package's script, or edit its variables and sections in place. No other changes required. |
 | `AppDeployToolkit\AppDeployToolkitExtensions.ps1` (custom functions) | Same place: `AppDeployToolkit\AppDeployToolkitExtensions.ps1` | The template ships the vendor's empty stub; paste your functions into it, or overwrite the file with your v3 one. Dot-sourced automatically. |
 | Banner PNG (`AppDeployToolkitBanner.png`) | `Assets\Banner.Classic.png` | Overwrite, keep the filename. PNG, 450 x 50 px. Classic dialogs only. |
 | Logo ICO (`AppDeployToolkitLogo.ico`) | `Assets\AppIcon.png` | Overwrite, keep the filename. v4 consumes PNG, 256 x 256 px; export your ICO to PNG. Pointers live in `Config\config.psd1` (`Assets` section: `Logo`, `LogoDark`, `Banner`, `TaskbarIcon`; filename or Base64). |
@@ -147,7 +152,9 @@ first draft and diff it.
 ## Quick start
 
 1. Download this kit (or clone the repo) and take the `template` folder.
-2. Drop your v3 `Deploy-Application.ps1` into the template root.
+2. Drop your v3 `Deploy-Application.ps1` into the template root, overwriting
+   the stock 3.10.1 script the template carries (or edit the stock one's
+   application variables and section bodies in place).
 3. Paste your custom functions into
    `AppDeployToolkit\AppDeployToolkitExtensions.ps1`.
 4. Overwrite `Assets\Banner.Classic.png` and `Assets\AppIcon.png` with your
@@ -169,22 +176,23 @@ run the `.ps1` directly as above to surface the parse error.
 
 Windows 11 (build 26200), Windows PowerShell 5.1, elevated, 2026-09-15.
 
-Integrity: all 222 template files hash-compared against the 4.1.8 release
-zip — identical. The tested tree was this exact template plus a scratch v3
-test script and a scratch extension function injected exactly the way steps
-2-3 above describe (kept out of the repo; the shipped template is untouched).
+Integrity: the 222 template files hash-compared against the 4.1.8 release
+zip and `Deploy-Application.ps1` against the 3.10.1 release zip — all
+identical, nothing modified. The tested tree was the shipped tree exactly
+as-is (no test files injected): the stock 3.10.1 script running under the
+4.1.8 compatibility engine.
 
 | Check | Result |
 |---|---|
-| Install with vendor-default config: exit code 0, toolkit log written | PASS |
-| Extensions stub dot-sourced (log line present) | PASS |
-| Custom function output in log (scratch function, test-injected) | PASS |
-| v3 `Execute-Process` executed via compat wrapper | PASS |
-| Per-package evidence subfolder `<App>-<Ver>-<Type>` created | PASS |
-| `Toolkit.LogPath` repointed to a custom root: log + subfolder landed there | PASS |
-| Uninstall: exit code 0, marker swept from all type-suffixed subfolders | PASS |
+| Stock 3.10.1 script, Install, vendor-default config: exit code 0, toolkit log written | PASS |
+| Stock script's Pre/Post-Installation sections executed | PASS |
+| v3 calls translated by the compat layer | PASS |
+| Extensions stub dot-sourced (vendor stub, log line present) | PASS |
+| `Toolkit.LogPath` repointed to a custom root: log landed there | PASS |
+| Stock script, Uninstall: exit code 0, uninstall sections executed | PASS |
+| Stock script, Repair: exit code 0 | PASS |
 
-15 of 15 automated checks green. Named untested: the stock
+13 of 13 automated checks green. Named untested: the stock
 `Deploy-Application.exe` launcher (the release binary is unsigned; the `.ps1`
 path above is the local-test method, and SYSTEM contexts used by ConfigMgr /
 Intune are unaffected), and Fluent dialog rendering (compat mode is
@@ -196,7 +204,8 @@ Classic-only by design).
 psadt-v4-migration/
     README.md                     this file (the migration map)
     template/                     the deployable v3-compat package (PSADT 4.1.8)
-        Deploy-Application.exe    stock launcher (template ships no .ps1)
+        Deploy-Application.ps1    stock 3.10.1 script; overwrite with yours
+        Deploy-Application.exe    stock launcher
         AppDeployToolkit/         compat frontend + PSAppDeployToolkit module
             AppDeployToolkitExtensions.ps1   vendor stub; add your functions
         Assets/                   AppIcon.png, Banner.Classic.png (replace)
