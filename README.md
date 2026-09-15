@@ -18,7 +18,8 @@ deploy it, and the evidence behind its claims.
 
 Move PSAppDeployToolkit v3.10.x packages to the current 4.1.8 engine without
 touching your scripts. Ships the official v3-compatibility template (v4 engine
-+ v3 API wrappers) pre-wired and lab-verified, plus the migration map for the
++ v3 API wrappers) untouched and hash-verified against the release, plus the
+migration map for the
 things that do not move by themselves: where the banner PNG and logo go
 (`Assets\`), where custom functions go (`AppDeployToolkitExtensions.ps1`
 conditional dot-source), where the custom log path goes

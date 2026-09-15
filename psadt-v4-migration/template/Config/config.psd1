@@ -98,8 +98,7 @@
         BalloonNotifications = $true
 
         # Choose from either 'Fluent' for contemporary dialogs, or 'Classic' for PSAppDeployToolkit 3.x WinForms dialogs.
-        # v3 compatibility mode supports the Classic dialogs only; the banner (Assets\Banner.Classic.png) is Classic-only.
-        DialogStyle = 'Classic'
+        DialogStyle = 'Fluent'
 
         # Specify the Accent Color in hex (with the first two characters for transparency, 00 = 0%, FF = 100%), e.g. 0xFF0078D7.
         # The value specified here should be literally typed (i.e. `FluentAccentColor = 0xFF0078D7`) and not wrapped in quotes.

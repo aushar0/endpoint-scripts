@@ -2,8 +2,8 @@
 # psadt-v4-migration
 
 > Move PSAppDeployToolkit v3.10.x packages to the current 4.1.8 engine without
-> touching your scripts: the official v3-compatibility template, pre-wired and
-> verified, plus the migration map for everything that does not move by itself.
+> touching your scripts: the official v3-compatibility template, untouched,
+> plus the migration map for everything that does not move by itself.
 
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-lightgrey)
 ![PSAppDeployToolkit](https://img.shields.io/badge/PSAppDeployToolkit-4.1.8%20(v3%20compat)-8B1A1A)
@@ -17,23 +17,24 @@ PSAppDeployToolkit 4.1.8 is the current stable release (January 2026). Its
 names (`Execute-MSI`, `Execute-Process`, `Write-Log`, `Exit-Script`,
 `Show-InstallationWelcome`, ...) translated to the v4 functions at runtime.
 
-This kit contains that template, built from the official
-[4.1.8 release](https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/tag/4.1.8)
-asset `PSAppDeployToolkit_Template_v3.zip`, plus:
+This kit is two things:
 
-- a sample v3-style `Deploy-Application.ps1` showing the drop-in shape,
-- a sample custom function inside the extensions stub,
-- the config pre-set for compatibility mode (Classic dialogs).
+- the `template/` folder: the official
+  [4.1.8 release](https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/tag/4.1.8)
+  asset `PSAppDeployToolkit_Template_v3.zip`, extracted and untouched — every
+  file hash-identical to the release,
+- this README: the migration map for the things the template deliberately
+  leaves to you (script, extensions, branding, log path).
 
-The whole thing was exercised end-to-end on a test machine: install, custom
-log path, and uninstall, all silent, 15/15 checks green (evidence below).
+The template was exercised end-to-end on a test machine: install, custom log
+path, and uninstall, all silent, 15/15 checks green (evidence below).
 
 ## The four questions
 
 | You have (v3) | It goes (v4 compat template) | Notes |
 |---|---|---|
-| `Deploy-Application.ps1` | Package root, next to `Deploy-Application.exe` | Replace the shipped sample with yours. No edits required. |
-| `AppDeployToolkit\AppDeployToolkitExtensions.ps1` (custom functions) | Same place: `AppDeployToolkit\AppDeployToolkitExtensions.ps1` | The template ships an empty stub with sections; paste your functions in, or overwrite the file with your v3 one. Dot-sourced automatically. |
+| `Deploy-Application.ps1` | Package root, next to `Deploy-Application.exe` | The template ships no script; drop yours in. No edits required. |
+| `AppDeployToolkit\AppDeployToolkitExtensions.ps1` (custom functions) | Same place: `AppDeployToolkit\AppDeployToolkitExtensions.ps1` | The template ships the vendor's empty stub; paste your functions into it, or overwrite the file with your v3 one. Dot-sourced automatically. |
 | Banner PNG (`AppDeployToolkitBanner.png`) | `Assets\Banner.Classic.png` | Overwrite, keep the filename. PNG, 450 x 50 px. Classic dialogs only. |
 | Logo ICO (`AppDeployToolkitLogo.ico`) | `Assets\AppIcon.png` | Overwrite, keep the filename. v4 consumes PNG, 256 x 256 px; export your ICO to PNG. Pointers live in `Config\config.psd1` (`Assets` section: `Logo`, `LogoDark`, `Banner`, `TaskbarIcon`; filename or Base64). |
 | Custom log path (config.xml `Toolkit_LogPath`) | `Config\config.psd1` -> `Toolkit.LogPath` | Also `Toolkit.LogPathNoAdminRights` and `MSI.LogPath`. The old XML config is NOT read. |
@@ -69,9 +70,16 @@ If (Get-Command -Name Get-ADTSession -ErrorAction SilentlyContinue) {
 }
 ```
 
-The sample `Deploy-Application.ps1` in this template uses exactly this shim,
-then builds the per-package evidence subfolder
-`<log root>\<AppName>-<AppVersion>-<DeploymentType>` on top of it.
+On top of that shim, the common per-package evidence subfolder pattern looks
+like this:
+
+```powershell
+[String]$safeAppName = ($appName -replace '[\\/:*?"<>|]', '' -replace '\s+', ' ').Trim()
+[String]$evidenceDir = Join-Path $configToolkitLogDir ("{0}-{1}-{2}" -f $safeAppName, $appVersion, $DeploymentType)
+```
+
+Note the `-<DeploymentType>` suffix: uninstall-side cleanup must sweep the
+type variants (`<app>-<version>-*`), not look in its own subfolder only.
 
 Related keys: `Toolkit.LogToSubfolder` (one subfolder per package, based on
 InstallName) and `Toolkit.LogToHierarchy` (`AppVendor\AppName\AppVersion`
@@ -90,14 +98,15 @@ tree) are built-in alternatives if you do not want the in-script pattern.
 | `Toolkit_CompressLogs` | `Toolkit.CompressLogs` |
 | `Toolkit_LogDebugMessage` | `Toolkit.LogDebugMessage` (verbose/debug toggles) |
 | `Company` | `Toolkit.CompanyName` |
-| UI dialog style | `UI.DialogStyle` (this template pins `Classic`; see below) |
+| UI dialog style | `UI.DialogStyle` (set to `Classic`; see below) |
 | User-facing text (button labels, dialog strings) | `Strings\strings.psd1` (+ per-language subfolders) |
 
 ## Compatibility-mode facts worth knowing
 
-- **Classic dialogs only.** The Fluent UI takes parameters (e.g. `SubTitle`)
-  that v3 functions do not accept, and the banner is a Classic-only element.
-  This template ships with `UI.DialogStyle = 'Classic'` for that reason.
+- **Set `UI.DialogStyle = 'Classic'` before deploying to users.** The template
+  ships the vendor default `Fluent`, but compatibility mode supports the
+  Classic dialogs only — Fluent takes parameters (e.g. `SubTitle`) that v3
+  functions do not accept, and the banner is a Classic-only element.
 - **Every v3 call works, and logs a deprecation notice.** The compat wrappers
   announce themselves in the log, once per call:
 
@@ -138,13 +147,13 @@ first draft and diff it.
 ## Quick start
 
 1. Download this kit (or clone the repo) and take the `template` folder.
-2. Drop your v3 `Deploy-Application.ps1` into the template root, replacing
-   the sample.
+2. Drop your v3 `Deploy-Application.ps1` into the template root.
 3. Paste your custom functions into
    `AppDeployToolkit\AppDeployToolkitExtensions.ps1`.
 4. Overwrite `Assets\Banner.Classic.png` and `Assets\AppIcon.png` with your
    branding (keep the filenames).
-5. Set `Toolkit.LogPath` in `Config\config.psd1` if you use a custom log root.
+5. In `Config\config.psd1`: set `UI.DialogStyle = 'Classic'`, and set
+   `Toolkit.LogPath` if you use a custom log root.
 6. Test from an elevated console:
 
 ```powershell
@@ -159,14 +168,17 @@ run the `.ps1` directly as above to surface the parse error.
 ## What was verified
 
 Windows 11 (build 26200), Windows PowerShell 5.1, elevated, 2026-09-15.
-Three silent runs against the exact template in this kit:
+
+Integrity: all 222 template files hash-compared against the 4.1.8 release
+zip — identical. The tested tree was this exact template plus a scratch v3
+test script and a scratch extension function injected exactly the way steps
+2-3 above describe (kept out of the repo; the shipped template is untouched).
 
 | Check | Result |
 |---|---|
-| Install (shipped config): exit code 0 | PASS |
-| Toolkit log written to `C:\Windows\Logs\Software\` | PASS |
+| Install with vendor-default config: exit code 0, toolkit log written | PASS |
 | Extensions stub dot-sourced (log line present) | PASS |
-| Sample custom function output (`SUMMARY:` line) in log | PASS |
+| Custom function output in log (scratch function, test-injected) | PASS |
 | v3 `Execute-Process` executed via compat wrapper | PASS |
 | Per-package evidence subfolder `<App>-<Ver>-<Type>` created | PASS |
 | `Toolkit.LogPath` repointed to a custom root: log + subfolder landed there | PASS |
@@ -182,23 +194,17 @@ Classic-only by design).
 
 ```text
 psadt-v4-migration/
-    README.md                     this file
+    README.md                     this file (the migration map)
     template/                     the deployable v3-compat package (PSADT 4.1.8)
-        Deploy-Application.ps1    sample v3-style script; replace with yours
-        Deploy-Application.exe    stock launcher
+        Deploy-Application.exe    stock launcher (template ships no .ps1)
         AppDeployToolkit/         compat frontend + PSAppDeployToolkit module
-            AppDeployToolkitExtensions.ps1   stub + sample custom function
+            AppDeployToolkitExtensions.ps1   vendor stub; add your functions
         Assets/                   AppIcon.png, Banner.Classic.png (replace)
-        Config/config.psd1        toolkit + UI config (DialogStyle pinned Classic)
+        Config/config.psd1        toolkit + UI config (vendor defaults)
         Strings/                  dialog text, 27 languages
         Files/                    your payload goes here
         SupportFiles/             your loose files go here
 ```
-
-The template tree is the official 4.1.8 release asset with three changes:
-the sample `Deploy-Application.ps1`, the sample function in the extensions
-stub, and the `DialogStyle = 'Classic'` pin with its comment. Everything else
-is byte-identical to the release, so future toolkit upgrades re-diff cleanly.
 
 ## License
 
