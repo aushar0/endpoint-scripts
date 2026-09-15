@@ -65,15 +65,44 @@ Two rules:
    is single-quoted and expanded by the toolkit: `$envWinDir`,
    `$envProgramData`, `$envSystemDrive`, `$envTemp` are valid. Writing
    `$env:WinDir` will not expand.
-2. **Scripts that read `$configToolkitLogDir` need a two-line shim.** The v3
-   engine defined that variable; the compat layer does not. The v4 equivalent
-   is the session object:
+2. **Scripts that read v3's `$configToolkit*` variables need a shim, placed
+   AFTER the toolkit bootstrap — not in the variable declaration section at
+   the top.** The v3 engine defined these from config.xml; the v4 compat
+   layer defines none of them (all 13 from the 3.10.1 source: LogDir,
+   LogStyle, LogMaxSize, LogMaxHistory, LogAppend, LogDebugMessage,
+   LogWriteToHost, CachePath, CompressLogs, RegPath, TempPath, RequireAdmin,
+   UseRobocopy). Re-derive what your script reads:
 
 ```powershell
+If (Get-Command -Name Get-ADTConfig -ErrorAction SilentlyContinue) {
+    [String]$configToolkitLogStyle = (Get-ADTConfig).Toolkit.LogStyle
+}
 If (Get-Command -Name Get-ADTSession -ErrorAction SilentlyContinue) {
     [String]$configToolkitLogDir = (Get-ADTSession).LogPath
 }
 ```
+
+   **Placement is the trap.** The shim goes below the bootstrap block — after
+   the line `##* Do not modify section above` (below
+   `#endregion END VARIABLE DECLARATION`), before the Install / Uninstall /
+   Repair sections. At the top of the script the toolkit is not loaded yet:
+   `Get-ADTConfig` / `Get-ADTSession` do not exist, the `If` never fires, and
+   the variable is never assigned. The first later reference then fails with:
+
+```text
+The variable '$configToolkitLogStyle' cannot be retrieved because it has not been set.
+```
+
+   and the package exits 60001. Both behaviors verified against the stock
+   3.10.1 script: shim in the variable declaration section = the error above,
+   exit 60001; shim after the bootstrap = `CMTrace` resolved and logged,
+   exit 0.
+
+   | v3 variable | v4 equivalent |
+   |---|---|
+   | `$configToolkitLogDir` | `(Get-ADTSession).LogPath` |
+   | `$configToolkitLogStyle` | `(Get-ADTConfig).Toolkit.LogStyle` |
+   | other `$configToolkit*` | `(Get-ADTConfig).Toolkit.<same name>` (keys per the config translation map; `UseRobocopy` -> `Toolkit.FileCopyMode = 'Robocopy'`, `RequireAdmin` -> session parameter) |
 
 On top of that shim, the common per-package evidence subfolder pattern looks
 like this:
@@ -191,6 +220,8 @@ as-is (no test files injected): the stock 3.10.1 script running under the
 | `Toolkit.LogPath` repointed to a custom root: log landed there | PASS |
 | Stock script, Uninstall: exit code 0, uninstall sections executed | PASS |
 | Stock script, Repair: exit code 0 | PASS |
+| `$configToolkitLogStyle` shim misplaced at the top: fails with "cannot be retrieved because it has not been set", exit 60001 (reproduced deliberately) | PASS |
+| Same shim placed after the bootstrap: `CMTrace` resolved into the log, exit 0 | PASS |
 
 13 of 13 automated checks green. Named untested: the stock
 `Deploy-Application.exe` launcher (the release binary is unsigned; the `.ps1`
