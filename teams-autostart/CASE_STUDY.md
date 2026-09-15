@@ -249,6 +249,11 @@ We did not characterize every re-enable trigger (updates especially); a daily
 remediation makes that unknown irrelevant. Both test machines held state across
 reboots and across app launches, but updates were not exercised.
 
+The kit ships both shapes as one idempotent deployer: `deploy_teams_autostart.ps1`
+(`-Mode Disable`, the default) and `-Mode Delay -DelayMinutes N` for the AUMID
+variant with its window trade-off; `detect_delay_drift.ps1` is the mode-aware
+detection counterpart.
+
 **Sizing the win:** the boot impact is real — `ms-teams` plus a dozen
 `msedgewebview2` processes (≈450–700 MB working set on the lab VM, shared runtime)
 spawning inside the first minutes of logon. But before/after should be *measured*

@@ -35,29 +35,39 @@ to change.
 powershell -ExecutionPolicy Bypass -File .\probe_teams_autostart.ps1
 powershell -ExecutionPolicy Bypass -File .\probe_teams_run_vector.ps1
 
-# 2. Disable both vectors (backs up originals to autostart_backup.json)
-powershell -ExecutionPolicy Bypass -File .\test_disable_teams_autostart.ps1
+# 2a. Disable (recommended): vectors off, Teams starts only when opened
+powershell -ExecutionPolicy Bypass -File .\deploy_teams_autostart.ps1 -Mode Disable
 
-# 3. Check state any time (also after a reboot)
-powershell -ExecutionPolicy Bypass -File .\readback_teams_autostart.ps1
+# 2b. Delay instead: vectors off + Teams starts N minutes after logon.
+#     TRADE-OFF: a Teams window WILL appear and take focus at logon+N.
+#     (Quiet delayed start does not exist - CASE_STUDY.md section 3.)
+powershell -ExecutionPolicy Bypass -File .\deploy_teams_autostart.ps1 -Mode Delay -DelayMinutes 5 -SmokeTest
 
-# 4. Undo — restore exactly what was there before
+# 3. Check state any time (mode-aware; also after a reboot)
+powershell -ExecutionPolicy Bypass -File .\detect_delay_drift.ps1
+
+# 4. Undo - unregister task/kit files, and restore vectors if wanted
+powershell -ExecutionPolicy Bypass -File .\deploy_teams_autostart.ps1 -Undo
 powershell -ExecutionPolicy Bypass -File .\test_disable_teams_autostart.ps1 -Revert
 ```
 
-Fleet shape: wrap steps 2 and 3 as an Intune Proactive Remediation (user
-context, daily). Detection must tolerate a missing `Run` value — Teams deletes
-it itself sometimes. Case study §4 has the details.
+Fleet shape: wrap step 2 (either mode) as the Intune Proactive Remediations
+remediation script and step 3 as detection - user context, daily cadence.
+Re-running refreshes everything after Teams updates. Case study §4 has the
+deployment details and the risk register.
 
 ## What's in the box
 
 | File | Purpose |
 |---|---|
 | `CASE_STUDY.md` | The full investigation: mechanism, findings, receipts, limits |
+| `deploy_teams_autostart.ps1` | The deployer: `-Mode Disable` (default) or `-Mode Delay -DelayMinutes N` (window trade-off); idempotent, daily-cadence safe; `-Undo` supported |
+| `detect_delay_drift.ps1` | Mode-aware Intune detection (exit 0 = compliant) |
 | `probe_teams_autostart.ps1` | Read-only: package, manifest startup task, State key, Run/StartupApproved vectors, processes, AUMID |
 | `probe_teams_run_vector.ps1` | Read-only: Run value data, StartupApproved flag bytes, alias, app config |
-| `test_disable_teams_autostart.ps1` | The fix: disables both vectors Task-Manager-style; `-Revert` restores from backup; `-LaunchTest` proves the AUMID launch path |
+| `test_disable_teams_autostart.ps1` | Manual disable of both vectors; `-Revert` restores from backup; `-LaunchTest` proves the AUMID launch path |
 | `readback_teams_autostart.ps1` | Post-reboot verification (State enum name, flag byte, processes) |
+| `vmtest/` | The lab A/B rig (VM job queue, watch scripts) — method reference, not needed for the fix |
 
 ## How the claims were verified
 
