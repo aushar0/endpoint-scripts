@@ -14,6 +14,18 @@ deploy it, and the evidence behind its claims.
 
 ## Kits
 
+### [psadt-v4-migration](psadt-v4-migration/)
+
+Move PSAppDeployToolkit v3.10.x packages to the current 4.1.8 engine without
+touching your scripts. Ships the official v3-compatibility template (v4 engine
++ v3 API wrappers) pre-wired and lab-verified, plus the migration map for the
+things that do not move by themselves: where the banner PNG and logo go
+(`Assets\`), where custom functions go (`AppDeployToolkitExtensions.ps1`
+conditional dot-source), where the custom log path goes
+(`Config\config.psd1` -> `Toolkit.LogPath`), the `$configToolkitLogDir` shim,
+and which v3 functions have no compat wrapper at all. 15/15 silent
+install / custom-log-path / uninstall checks green on the exact shipped tree.
+
 ### [audio-stack-dell-pro](audio-stack-dell-pro/)
 
 One detection/remediation pair that cuts boot cost from the Cirrus audio stack
