@@ -1,12 +1,28 @@
-# Case study: Killing the new Teams boot launch — the complete mechanism, tested
+<!-- doc-review 2026-09-15: three-lens gate (hiring-manager / principal-engineer / editor) + deslop pass. REDs fixed: evidence screenshots shipped (evidence/), mechanism claim downgraded to observed behavior, "not achievable" hedged to tested result, boot->sign-in normalized, glossary+TOC+file tree added. -->
+# Case study: Stopping new Teams from launching at sign-in — what works, what doesn't, and why
 
-**Audience:** Intune/ConfigMgr endpoint engineers who want Microsoft Teams (new Teams,
-MSIX) to stop launching at user logon — or who were asked to "just delay it."
+> **In three sentences:** Microsoft Teams starts itself in the background every time
+> users sign in to Windows, and on many machines it is the heaviest thing happening
+> at that moment. We built and tested a reversible, documented way to stop that
+> automatic start. We also tested six ways to *delay* the start instead of stopping
+> it — the approach that is usually asked for first — and found none that works
+> without showing a Teams window on screen; this document is that evidence.
+
+**Audience:** endpoint engineers (Intune/ConfigMgr) and their stakeholders.
+Technical terms are expanded on first use and collected again in the
+[Glossary](#glossary-terms-used-in-this-document). One vocabulary note: this
+document says **sign-in** (also called logon) for the moment a user reaches their
+desktop — most people say "boot," but Teams does not start at power-on; it starts
+when the user's session begins.
 
 **Tested on:** Windows 11 24H2 (production device, co-managed) and Windows 11 25H2
-build 26200 (lab VM). New Teams MSIX `MSTeams_8wekyb3d8bbwe`, versions 26213–26225.
-Every claim below is tied to a live test, a screenshot, or a cited source. Where we
-could not verify something, the doc says so.
+build 26200 (lab VM). New Teams — the `MSTeams_8wekyb3d8bbwe` app package (an
+**MSIX** is the Windows app-package format used for Store and modern apps) —
+versions 26213–26225. Every claim below is tied to a live test, a screenshot in
+the `evidence/` folder, or a cited source. Where we could not verify something,
+the document says so.
+
+**Contents:** [TL;DR](#tldr) · [1. How Teams starts itself](#1-how-new-teams-actually-starts-itself) · [2. Disabling](#2-disabling-what-works-what-silently-doesnt) · [3. The delay question](#3-the-delay-question-possible-but-not-quietly) · [4. Fleet deployment](#4-fleet-deployment-shape) · [5. How we tested](#5-how-we-tested-reproduce-it) · [6. What we could not find](#6-what-we-could-not-find-and-what-we-did-not-test) · [7. References](#7-references) · [Glossary](#glossary-terms-used-in-this-document)
 
 ---
 
@@ -29,8 +45,9 @@ and the gating evidence, which is what you bring to the escalation conversation.
 ## 1. How new Teams actually starts itself
 
 This is the part nearly every forum answer gets wrong. New Teams registers
-**two independent autostart vectors**, and disabling only one leaves the other
-launching Teams at logon anyway.
+**two independent autostart vectors** — a *vector* here means one self-start
+mechanism; Teams has two, and disabling only one leaves the other launching
+Teams at sign-in anyway.
 
 ### Vector 1: the packaged startup task
 
@@ -60,7 +77,9 @@ virtualized devices* → *Teams autostart*):
 | 4 | EnabledByPolicy |
 
 This is what the Task Manager *Startup apps* toggle and Settings → Apps → Startup
-write.
+write. (`HKCU` in these paths means HKEY_CURRENT_USER — the part of the Windows
+registry that belongs to the signed-in user, which is why no admin rights are
+needed to change it.)
 
 ### Vector 2: a classic Run entry
 
@@ -137,17 +156,17 @@ Windows gives packaged startup tasks an ON/OFF switch. There is **no delay knob*
 — the State enum is the entire surface. (Services have delayed-autostart; that is
 a boot-queue mechanism and does not apply to logon launches.) So a delay has to
 be built: disable the native paths, then launch Teams yourself from a scheduled
-task with a Logon trigger and a `PT2M`-style delay. The task fires exactly on
-time — that part works.
+task with a Logon trigger and a delay (`PT2M` — the task scheduler's ISO-8601
+format for "2 minutes"). The task fires exactly on time — that part works.
 
 The entire difficulty is the task's *action*. We tested four:
 
 | Task action | Result |
 |---|---|
-| Execute the native command: `ms-teams.exe msteams:system-initiated` | **Silent no-op that reports exit 0.** Task Scheduler uses `CreateProcess`, which cannot activate the app-execution-alias reparse point. This is the nastiest trap in the space: the task log says success, Teams never starts. |
+| Execute the native command: `ms-teams.exe msteams:system-initiated` | **Silent no-op that reports exit 0.** The task logs success; Teams never starts. The alias only launches Teams when the OS's own launch machinery delivers it (Explorer processing the Run entry, or the startup-task helper); we could not make Task Scheduler deliver it, and the exact gate condition is untested. This is the nastiest trap in the space: the remediation looks successful and is not. |
 | `explorer.exe shell:AppsFolder\MSTeams_8wekyb3d8bbwe!MSTeams` | No launch. |
 | `powershell Start-Process 'msteams:'` (protocol) | No launch. |
-| `powershell Start-Process 'shell:AppsFolder\MSTeams_8wekyb3d8bbwe!MSTeams'` | **Teams starts within seconds.** (ShellExecute path.) |
+| `powershell Start-Process 'shell:AppsFolder\MSTeams_8wekyb3d8bbwe!MSTeams'` | **Teams starts within seconds.** (ShellExecute path. The `shell:AppsFolder\<id>` string is an **AUMID** — Application User Model ID, the identifier Windows uses to launch a packaged app; Teams' is `MSTeams_8wekyb3d8bbwe!MSTeams`.) |
 
 So the only working delayed launcher is the ShellExecute/AUMID one.
 
@@ -161,6 +180,10 @@ minutes):
 - +6s: a Teams window appears (white pre-render frame) with its own taskbar button
 - +60s and +180s: the full **sign-in window, in the foreground, unchanged** —
   focus stolen, sitting over the desktop
+
+![+6 seconds after the delayed task fires: a Teams window is materializing on the desktop](evidence/keyframe_6s_white_window.png)
+
+![+60 seconds: the Teams sign-in window in the foreground, unchanged](evidence/keyframe_60s_signin_window.png)
 
 If a Teams window two minutes after logon is acceptable, that variant is
 mechanically solid (the timer is exact; the task fired at logon+2:00 in every
@@ -205,10 +228,12 @@ one environment each:
 Pattern: the helper only functions in a logon where the native autostart
 pipeline already ran — precisely the thing a delay design disables. The single
 success was riding that pipeline's coattails. Conclusion, after six attempts
-across fresh boots and both delay mechanisms: **a quiet delayed start is not
-achievable.** The choice is binary — native autostart (quiet, at logon) or
-disabled (nothing at logon) — with AUMID activation as the only way to put
-Teams on a timer, at the cost of a popped window.
+across fresh boots and both delay mechanisms: **we could not achieve a quiet
+delayed start by any mechanism we tested.** The helper's exact gate condition is
+unknown — it is an undocumented binary — so we state this as our result, not as
+a proof of impossibility. The practical choice is binary: native autostart
+(quiet, at sign-in) or disabled (nothing at sign-in) — with AUMID activation as
+the only way to put Teams on a timer, at the cost of a popped window.
 
 ### The AUMID delay: mechanically solid, visibly disruptive
 
@@ -232,9 +257,10 @@ cadence, that:
 
 **Detection:** compliant when `State = 1` **and** (`Run` value absent **or** its
 StartupApproved flag byte is odd — the app deletes the Run value itself
-sometimes; don't require it to exist) **and** no unexpected ms-teams process at
-logon, if you want behavioral cover. Kill running `ms-teams` processes only if
-policy allows — not required for the next logon to be clean.
+sometimes; don't require it to exist) **and**, in Delay mode, the scheduled task
+exists (the kit's `detect_delay_drift.ps1` implements exactly this check). Kill
+running `ms-teams` processes only if policy allows — not required for the next
+sign-in to be clean.
 
 **If the requirement is "delay, not disable":** §3 is the evidence that this is
 not currently deliverable without disruption — six tested approaches, each with
@@ -272,7 +298,7 @@ scope registry changes only, and a strict arm structure:
 | A (control) | both enabled | `ms-teams` ×2 running 2.5 min post-boot |
 | A′ (half) | task disabled, Run live | **Teams still launched** — single-vector failure witnessed |
 | B (fix) | both disabled | **zero Teams processes**, same window, same logon path |
-| C (delay, AUMID) | both disabled + delayed task | task fired exactly at logon+2:00; **sign-in window popped** (screenshots) |
+| C (delay, AUMID) | both disabled + delayed task | task fired exactly at logon+2:00; **sign-in window popped** (screenshot evidence in `evidence/`) |
 | D (delay, helper) | both disabled + `msteams_autostarter.exe` | 1 success in a same-logon native-fire shadow; **5 no-ops since, incl. fresh boot at logon+2 min** — gated on the native pipeline |
 
 Method details worth stealing:
