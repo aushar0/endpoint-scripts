@@ -1,4 +1,3 @@
-<!-- doc-review pending: three-lens gate (hiring-manager / principal-engineer / editor) + deslop before team share. -->
 # psadt-v4-migration
 
 > Move PSAppDeployToolkit v3.10.x packages to the current 4.1.8 engine without
@@ -40,8 +39,8 @@ below).
 |---|---|---|
 | `Deploy-Application.ps1` | Package root, next to `Deploy-Application.exe` | The template carries the stock 3.10.1 script — overwrite it with your package's script, or edit its variables and sections in place. No other changes required. |
 | `AppDeployToolkit\AppDeployToolkitExtensions.ps1` (custom functions) | Same place: `AppDeployToolkit\AppDeployToolkitExtensions.ps1` | The template ships the vendor's empty stub; paste your functions into it, or overwrite the file with your v3 one. Dot-sourced automatically. |
-| Banner PNG (`AppDeployToolkitBanner.png`) | `Assets\Banner.Classic.png` | Overwrite, keep the filename. PNG, 450 x 50 px. Classic dialogs only. |
-| Logo ICO (`AppDeployToolkitLogo.ico`) | `Assets\AppIcon.png` | Overwrite, keep the filename. v4 consumes PNG, 256 x 256 px; export your ICO to PNG. Pointers live in `Config\config.psd1` (`Assets` section: `Logo`, `LogoDark`, `Banner`, `TaskbarIcon`; filename or Base64). |
+| Banner PNG (`AppDeployToolkitBanner.png`) | `Assets\Banner.Classic.png` | Overwrite, keep the filename. PNG, 900 x 125 px (match the shipped asset). Classic dialogs only. |
+| Logo ICO (`AppDeployToolkitLogo.ico`) | `Assets\AppIcon.png` | Overwrite, keep the filename. v4 consumes PNG (the shipped icon is 1024 x 1024); export your ICO to PNG. Pointers live in `Config\config.psd1` (`Assets` section: `Logo`, `LogoDark`, `Banner`, `TaskbarIcon`; filename or Base64). |
 | Custom log path (config.xml `Toolkit_LogPath`) | `Config\config.psd1` -> `Toolkit.LogPath` | Also `Toolkit.LogPathNoAdminRights` and `MSI.LogPath`. The old XML config is NOT read. |
 
 ## Custom log path in detail
