@@ -99,6 +99,20 @@ mechanism (and why one launcher reports success while doing nothing).
 screenshot series, and the trap that turns a "successful" remediation into a
 silent no-op.*
 
+<!-- kit:remote-help-sccm:start -->
+### [remote-help-sccm](remote-help-sccm/)
+
+Microsoft Remote Help (attended support client) as a ConfigMgr / Software
+Center application: PSADT 3.10.x wrapper around the silent vendor
+bootstrapper with a SHA-256 payload pin, a post-install ground-truth
+check (Burn bootstrappers exit 0 after failed applies), idempotent
+uninstall, and one detection script that serves both SCCM and Intune
+(32-bit-safe, optional version floor). Deployment shape defaults to
+Available so machines only carry the client once a user opts in. Lab
+battery: install x2 / repair / uninstall x2 / SYSTEM all exit 0, zero
+uninstall residue; detection true-positive x3 + true-negative x4.
+<!-- kit:remote-help-sccm:end -->
+
 ## Conventions
 
 - One folder per kit; the kit's README is the front door.
