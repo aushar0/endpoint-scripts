@@ -14,6 +14,7 @@ Map:
 Read-only, no waits, runs in seconds. Schedule: daily, e.g. 19:00 local.
 #>
 $ErrorActionPreference = 'SilentlyContinue'
+$out = @()
 
 # --- Layer 0: hardware gate ---
 $sp = Get-CimInstance Win32_ComputerSystemProduct
@@ -107,17 +108,24 @@ foreach ($root in 'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10E0',
 }
 if ($fwCurrent -and ([version]$fwCurrent -lt [version]$fwExtTarget)) {
     $needs += "vision-firmware-extension: $fwCurrent -> $fwExtTarget"
-    Write-Output "HW9TN|fw|proxy=$fwCurrent|target>=$fwExtTarget|state=OLD"
+    $out += "HW9TN|fw|proxy=$fwCurrent|target>=$fwExtTarget|state=OLD"
 } elseif ($fwCurrent) {
-    Write-Output "HW9TN|fw|proxy=$fwCurrent|target>=$fwExtTarget|state=CURRENT"
+    $out += "HW9TN|fw|proxy=$fwCurrent|target>=$fwExtTarget|state=CURRENT"
 }
+
+# --- headline first (survives any column-preview truncation), then buffered detail ---
+$needNames = (@($needs + $misbound) | ForEach-Object { ($_ -split ':')[0] }) -join ','
+$brkNames  = (@($problem) | ForEach-Object { ($_ -split ' ')[0] }) -join ','
+$headline = if ($needs.Count -or $misbound.Count) { "NEEDS($($needs.Count + $misbound.Count)): $needNames" } else { 'OK' }
+if ($brkNames) { $headline += " | BROKEN: $brkNames" }
+if ($disabled) { $headline += ' | disabled-by-choice' }
+$headline += " | fw:$(if ($fwCurrent) { $fwCurrent } else { 'n/a' }) | upg:$($os.InstallDate.ToString('yyyy-MM-dd')) | err7d:$fsErr"
+Write-Output $headline
+Write-Output ''
+$out | ForEach-Object { Write-Output $_ }
 
 # --- exit map ---
 if ($needs.Count -or $misbound.Count) {
-    Write-Output "NEEDS-REMEDIATION: $($needs.Count + $misbound.Count) finding(s)"
-    $needs + $misbound | ForEach-Object { Write-Output "  $_" }
-    if ($problem) { Write-Output "also-broken-now: $($problem -join '; ')" }
-    if ($disabled) { Write-Output "also-disabled (NOT a fault - user/policy choice): $($disabled -join '; ')" }
     exit 1
 }
 if ($problem.Count) {
