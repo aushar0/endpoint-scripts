@@ -1,11 +1,12 @@
 <#
 HW9TN_pr_detect.ps1 - Intune Remediations DETECTION script (exit 0/1 ONLY)
 
-Performance design (2026-09-09): all PnP properties are read in BATCHED CIM
-calls (Get-PnpDeviceProperty accepts an array of instance IDs) - one call per
-property key instead of one call per device. A full-stack scan runs in seconds
-and leaves the machine alone: a handful of WMI queries, no writes, no process
-or service interaction.
+Data layer (2026-09-09): device inventory comes from two CIM classes, correctly
+keyed by PNPDeviceID - Win32_PnPEntity (hardware IDs, problem codes, class,
+name) and Win32_PnPSignedDriver (driver version/provider/INF). Bulk
+Get-PnpDeviceProperty is NOT used: it stamps every result with the first
+device's InstanceId (verified live), which silently collapses per-device maps.
+Full scan runs in ~2s; read-only; no writes, no process or service interaction.
 
 Remediations gate: remediation runs ONLY when detection exits exactly 1.
 Map:
@@ -43,10 +44,10 @@ $targets = @(
     @{ n = 'iacamera64-PB-LNL'; re = 'VEN_8086&DEV_(64A0|6420|64B0)&SUBSYS_0C(DC|F8)1028.*INT3480';           v = '70.26100.2.21770' }
     @{ n = 'iaisp64-PB-ARL';    re = 'VEN_8086&DEV_7D19&SUBSYS_0C(E8|F7)1028';                                 v = '64.26100.13.20730' }
     @{ n = 'iaisp64-PB-LNL';    re = 'VEN_8086&DEV_(645D|5A19)&SUBSYS_0C(DC|F8)1028';                          v = '70.26100.2.21770' }
-    @{ n = 'hm1092-PB';         re = 'VEN_HIMX&DEV_1092&SUBSYS_0C(DC|F8|CE8|F7)1028';                         v = '70.26100.2.21770' }
-    @{ n = 'ov05c10-PB';        re = 'VEN_OVTI&DEV_05C1&SUBSYS_0C(DC|F8|CE8|F7)1028';                         v = '70.26100.2.21770' }
-    @{ n = 'ov08x40-PB';        re = 'VEN_OVTI&DEV_08F4&SUBSYS_0C(DC|F8|CE8|F7)1028';                         v = '70.26100.2.21770' }
-    @{ n = 'iactrllogic-PB';    re = 'VEN_INT&DEV_(3472|346F)&SUBSYS_0C(DC|F8|CE8|F7)1028';                   v = '70.26100.2.21770' }
+    @{ n = 'hm1092-PB';         re = 'VEN_HIMX&DEV_1092&SUBSYS_0C(DC|F8|E8|F7)1028';                         v = '70.26100.2.21770' }
+    @{ n = 'ov05c10-PB';        re = 'VEN_OVTI&DEV_05C1&SUBSYS_0C(DC|F8|E8|F7)1028';                         v = '70.26100.2.21770' }
+    @{ n = 'ov08x40-PB';        re = 'VEN_OVTI&DEV_08F4&SUBSYS_0C(DC|F8|E8|F7)1028';                         v = '70.26100.2.21770' }
+    @{ n = 'iactrllogic-PB';    re = 'VEN_INT&DEV_(3472|346F)&SUBSYS_0C(DC|F8|E8|F7)1028';                   v = '70.26100.2.21770' }
     @{ n = 'usbbridge';         re = 'VID_8086&PID_0B63|VID_2AC1&PID_20C[19B]|VID_06CB&PID_0701';  v = '4.0.1.586' }
     @{ n = 'UsbGpio';           re = 'INTC10B5';                                                     v = '1.0.2.739' }
     @{ n = 'usbi2c';            re = 'INTC10B6';                                                     v = '1.0.2.418' }
@@ -54,58 +55,44 @@ $targets = @(
     @{ n = 'Vision-ARL';        re = 'INTC10E0';                                                     v = '41.3.10000.40' }
 )
 
-# --- Batched device snapshot: 1 fleet-wide call for hardware IDs ---
-$devices = Get-PnpDevice -PresentOnly
-$ids = @($devices | ForEach-Object { $_.InstanceId })
-$hwMap = @{}
-Get-PnpDeviceProperty -InstanceId $ids -KeyName 'DEVPKEY_Device_HardwareIds' |
-    ForEach-Object { $hwMap[$_.InstanceId] = $_.Data }
+# --- Fleet snapshot: two CIM queries, keyed by PNPDeviceID ---
+$entities = Get-CimInstance Win32_PnPEntity -Property PNPDeviceID, HardwareID, ConfigManagerErrorCode, PNPClass, Name
+$drvMap = @{}
+Get-CimInstance Win32_PnPSignedDriver -Property PNPDeviceID, DriverVersion, DriverProviderName, InfName |
+    Where-Object { $_.PNPDeviceID } | ForEach-Object { $drvMap[$_.PNPDeviceID] = $_ }
 
-# match devices to family rows, and collect camera + dependency devices
-$matched = @(); $camIds = @(); $depIds = @()
-foreach ($d in $devices) {
-    if ($d.Class -in 'Camera', 'Image') { $camIds += $d.InstanceId }
-    if ($d.FriendlyName -match 'Integrated Sensor Solution|Serial IO|Management Engine') { $depIds += $d.InstanceId }
-    $hw = $hwMap[$d.InstanceId]
+# match entities to family rows; collect camera + dependency entities
+$matched = @(); $cams = @(); $deps = @()
+foreach ($e in $entities) {
+    if ($e.PNPClass -in 'Camera', 'Image') { $cams += $e }
+    if ($e.Name -match 'Integrated Sensor Solution|Serial IO|Management Engine') { $deps += $e }
+    $hw = $e.HardwareID
     if (-not $hw) { continue }
     $hwj = $hw -join ';'
     foreach ($t in $targets) {
-        if ($hwj -match $t.re) { $matched += [pscustomobject]@{ d = $d; t = $t }; break }
+        if ($hwj -match $t.re) { $matched += [pscustomobject]@{ e = $e; t = $t }; break }
     }
 }
-$stackIds = @($matched | ForEach-Object { $_.d.InstanceId })
-
-# --- Batched property reads: one call per key for stack + camera + dep devices ---
-$readIds = @($stackIds + $camIds + $depIds) | Select-Object -Unique
-function New-Map($KeyName) {
-    $m = @{}
-    Get-PnpDeviceProperty -InstanceId $readIds -KeyName $KeyName -ErrorAction SilentlyContinue |
-        ForEach-Object { $m[$_.InstanceId] = $_.Data }
-    return $m
-}
-$verMap  = New-Map 'DEVPKEY_Device_DriverVersion'
-$provMap = New-Map 'DEVPKEY_Device_DriverProvider'
-$infMap  = New-Map 'DEVPKEY_Device_DriverInfPath'
-$probMap = New-Map 'DEVPKEY_Device_ProblemCode'
 
 # --- evaluate ---
 $needs = @(); $misbound = @(); $problem = @(); $disabled = @(); $found = 0
 foreach ($m in $matched) {
     $found++
-    $cur = $verMap[$m.d.InstanceId]
+    $id = $m.e.PNPDeviceID
+    $drv = $drvMap[$id]
+    $cur = if ($drv) { $drv.DriverVersion } else { $null }
     if (-not $cur -or [version]$cur -lt [version]$m.t.v) { $needs += "$($m.t.n): $(if ($cur) { $cur } else { 'NONE' }) -> $($m.t.v)" }
-    $pc = $probMap[$m.d.InstanceId]
+    $pc = $m.e.ConfigManagerErrorCode
     if ($pc -eq 22) { $disabled += "$($m.t.n) disabled (CM_PROB_DISABLED - user/policy choice; a driver update will not enable it)" }
     elseif ($pc -and $pc -ne 0) { $problem += "$($m.t.n) code $pc" }
-    if ($provMap[$m.d.InstanceId] -match 'Microsoft' -or $infMap[$m.d.InstanceId] -match 'usbvideo\.inf') { $misbound += "$($m.t.n) on inbox driver" }
+    if ($drv -and ($drv.DriverProviderName -match 'Microsoft' -or $drv.InfName -match 'usbvideo\.inf')) { $misbound += "$($m.t.n) on inbox driver" }
 }
-foreach ($cid in $camIds) {
-    $cpc = $probMap[$cid]
-    $fname = ($devices | Where-Object InstanceId -eq $cid).FriendlyName
-    if ($cpc -eq 22) { $disabled += "$fname disabled" }
-    elseif ($cpc -and $cpc -ne 0) { $problem += "$fname code $cpc" }
+foreach ($c in $cams) {
+    $cpc = $c.ConfigManagerErrorCode
+    if ($cpc -eq 22) { $disabled += "$($c.Name) disabled" }
+    elseif ($cpc -and $cpc -ne 0) { $problem += "$($c.Name) code $cpc" }
 }
-$camCount = $camIds.Count
+$camCount = $cams.Count
 if ($camCount -eq 0 -and $disabled.Count -eq 0) { $problem += 'no camera devices present' }
 $fsErr = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-MF-FrameServer/Camera_FrameServer'; Level = 1,2,3; StartTime = (Get-Date).AddDays(-7) }).Count
 if ($fsErr -ge 5) { $problem += "$fsErr FrameServer errors in 7d" }
@@ -118,8 +105,9 @@ $out += ("HW9TN|ctx|bios={0}|build={1}|os_changed={2:yyyy-MM-dd}|winold={3}" -f 
     (Get-CimInstance Win32_BIOS).SMBIOSBIOSVersion, $os.BuildNumber, $os.InstallDate, (Test-Path 'C:\Windows.old'))
 $depNames = @{ 'Integrated Sensor Solution' = 'ish'; 'Serial IO' = 'serialio'; 'Management Engine' = 'me' }
 $depLine = foreach ($k in $depNames.Keys) {
-    $did = ($devices | Where-Object { $_.FriendlyName -match $k } | Select-Object -First 1).InstanceId
-    '{0}={1}' -f $depNames[$k], $(if ($did -and $verMap[$did]) { $verMap[$did] } else { 'missing' })
+    $de = ($deps | Where-Object { $_.Name -match $k } | Select-Object -First 1)
+    $dv = if ($de) { $drvMap[$de.PNPDeviceID].DriverVersion } else { $null }
+    '{0}={1}' -f $depNames[$k], $(if ($dv) { $dv } else { 'missing' })
 }
 $out += ('HW9TN|dep|' + ($depLine -join '|'))
 $out += ("HW9TN|rca|first_err={0}|upgraded={1:yyyy-MM-dd HH:mm}|delta={2}" -f `
@@ -134,7 +122,7 @@ foreach ($root in 'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10E0',
                   'HKLM:\SYSTEM\CurrentControlSet\Enum\USB\VID_06CB&PID_0701') {
     Get-ChildItem $root -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
         $p = Get-ItemProperty $_.PSPath
-        if ($p.CurrentFWVersion) { $script:fwCurrent = $p.CurrentFWVersion }
+        if ($p.CurrentFWVersion) { $fwCurrent = $p.CurrentFWVersion }
     }
 }
 if ($fwCurrent -and ([version]$fwCurrent -lt [version]$fwExtTarget)) {

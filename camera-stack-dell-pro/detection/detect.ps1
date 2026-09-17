@@ -77,10 +77,10 @@ $targets = @(
     @{ n = 'iacamera64-PB-LNL'; re = 'VEN_8086&DEV_(64A0|6420|64B0)&SUBSYS_0C(DC|F8)1028.*INT3480';           v = '70.26100.2.21770' }
     @{ n = 'iaisp64-PB-ARL';    re = 'VEN_8086&DEV_7D19&SUBSYS_0C(E8|F7)1028';                                 v = '64.26100.13.20730' }
     @{ n = 'iaisp64-PB-LNL';    re = 'VEN_8086&DEV_(645D|5A19)&SUBSYS_0C(DC|F8)1028';                          v = '70.26100.2.21770' }
-    @{ n = 'hm1092-PB';         re = 'VEN_HIMX&DEV_1092&SUBSYS_0C(DC|F8|CE8|F7)1028';                         v = '70.26100.2.21770' }
-    @{ n = 'ov05c10-PB';        re = 'VEN_OVTI&DEV_05C1&SUBSYS_0C(DC|F8|CE8|F7)1028';                         v = '70.26100.2.21770' }
-    @{ n = 'ov08x40-PB';        re = 'VEN_OVTI&DEV_08F4&SUBSYS_0C(DC|F8|CE8|F7)1028';                         v = '70.26100.2.21770' }
-    @{ n = 'iactrllogic-PB';    re = 'VEN_INT&DEV_(3472|346F)&SUBSYS_0C(DC|F8|CE8|F7)1028';                   v = '70.26100.2.21770' }
+    @{ n = 'hm1092-PB';         re = 'VEN_HIMX&DEV_1092&SUBSYS_0C(DC|F8|E8|F7)1028';                         v = '70.26100.2.21770' }
+    @{ n = 'ov05c10-PB';        re = 'VEN_OVTI&DEV_05C1&SUBSYS_0C(DC|F8|E8|F7)1028';                         v = '70.26100.2.21770' }
+    @{ n = 'ov08x40-PB';        re = 'VEN_OVTI&DEV_08F4&SUBSYS_0C(DC|F8|E8|F7)1028';                         v = '70.26100.2.21770' }
+    @{ n = 'iactrllogic-PB';    re = 'VEN_INT&DEV_(3472|346F)&SUBSYS_0C(DC|F8|E8|F7)1028';                   v = '70.26100.2.21770' }
     # --- shared components (same version in both packages) ---
     @{ n = 'usbbridge';         re = 'VID_8086&PID_0B63|VID_2AC1&PID_20C[19B]|VID_06CB&PID_0701';  v = '4.0.1.586' }
     @{ n = 'UsbGpio';           re = 'INTC10B5';                                                     v = '1.0.2.739' }
@@ -89,53 +89,44 @@ $targets = @(
     @{ n = 'Vision-ARL';        re = 'INTC10E0';                                                     v = '41.3.10000.40' }
 )
 
-# --- Layer 1: driver versions vs targets (BATCHED reads - one CIM call per key) ---
+# --- Layer 1: driver versions vs targets ---
+# Data layer: Win32_PnPEntity + Win32_PnPSignedDriver, keyed by PNPDeviceID.
+# (Bulk Get-PnpDeviceProperty stamps every result with the FIRST device's
+# InstanceId - verified live 2026-09-09 - so it is never used in bulk.)
 $needs   = @()
 $stackProblem = @()
 $stackDisabled = @()
-$Device  = Get-PnpDevice -PresentOnly
-$ids = @($Device | ForEach-Object { $_.InstanceId })
-$hwMap = @{}
-Get-PnpDeviceProperty -InstanceId $ids -KeyName 'DEVPKEY_Device_HardwareIds' |
-    ForEach-Object { $hwMap[$_.InstanceId] = $_.Data }
+$entities = Get-CimInstance Win32_PnPEntity -Property PNPDeviceID, HardwareID, ConfigManagerErrorCode, PNPClass, Name
+$drvMap = @{}
+Get-CimInstance Win32_PnPSignedDriver -Property PNPDeviceID, DriverVersion, DriverProviderName, InfName |
+    Where-Object { $_.PNPDeviceID } | ForEach-Object { $drvMap[$_.PNPDeviceID] = $_ }
 $matched = @()
-foreach ($d in $Device) {
-    $hw = $hwMap[$d.InstanceId]
+foreach ($e in $entities) {
+    $hw = $e.HardwareID
     if (-not $hw) { continue }
     $hwj = $hw -join ';'
     foreach ($t in $targets) {
-        if ($hwj -match $t.re) { $matched += [pscustomobject]@{ d = $d; t = $t }; break }
+        if ($hwj -match $t.re) { $matched += [pscustomobject]@{ e = $e; t = $t }; break }
     }
 }
-$readIds = @($matched | ForEach-Object { $_.d.InstanceId }) | Select-Object -Unique
-function New-Map($KeyName) {
-    $m = @{}
-    Get-PnpDeviceProperty -InstanceId $readIds -KeyName $KeyName -ErrorAction SilentlyContinue |
-        ForEach-Object { $m[$_.InstanceId] = $_.Data }
-    return $m
-}
-$verMap = New-Map 'DEVPKEY_Device_DriverVersion'
-$provMap = New-Map 'DEVPKEY_Device_DriverProvider'
-$infMap = New-Map 'DEVPKEY_Device_DriverInfPath'
-$probMap = New-Map 'DEVPKEY_Device_ProblemCode'
 
 foreach ($m in $matched) {
-    $d = $m.d; $t = $m.t
-    $cur = $verMap[$d.InstanceId]
+    $e = $m.e; $t = $m.t
+    $drv = $drvMap[$e.PNPDeviceID]
+    $cur = if ($drv) { $drv.DriverVersion } else { $null }
     $ok  = $cur -and ([version]$cur -ge [version]$t.v)
     $curTxt = if ($cur) { $cur } else { 'NO-DRIVER' }
+    $status = if ($e.ConfigManagerErrorCode -eq 0) { 'OK' } else { "ERR$($e.ConfigManagerErrorCode)" }
     Write-Output ("{0,-18} status={1,-10} installed={2,-20} target={3,-20} {4}" -f `
-        $t.n, $d.Status, $curTxt, $t.v, $(if ($ok) { 'OK' } else { 'OLD' }))
+        $t.n, $status, $curTxt, $t.v, $(if ($ok) { 'OK' } else { 'OLD' }))
     if (-not $ok) { $needs += "$($t.n): $curTxt -> $($t.v)" }
     # problem codes on any stack devnode (22 = disabled = deliberate, not a fault)
-    $pc = $probMap[$d.InstanceId]
+    $pc = $e.ConfigManagerErrorCode
     if ($pc -eq 22) { $stackDisabled += "$($t.n) disabled (user/policy)" }
-    elseif ($pc -and $pc -ne 0) { $stackProblem += "$($t.n) problem code $pc ($($d.Problem))" }
+    elseif ($pc -and $pc -ne 0) { $stackProblem += "$($t.n) problem code $pc" }
     # Upgrade-casualty signature: our Intel hardware bound to an inbox/OS driver
-    $prov   = $provMap[$d.InstanceId]
-    $infPth = $infMap[$d.InstanceId]
-    if ($prov -match 'Microsoft' -or $infPth -match 'usbvideo\.inf') {
-        $stackProblem += "$($t.n): Intel hardware on inbox driver ($infPth / $prov) - stack misbound (typical after OS upgrade)"
+    if ($drv -and ($drv.DriverProviderName -match 'Microsoft' -or $drv.InfName -match 'usbvideo\.inf')) {
+        $stackProblem += "$($t.n): Intel hardware on inbox driver ($(if ($drv) { $drv.InfName }) / $(if ($drv) { $drv.DriverProviderName })) - stack misbound (typical after OS upgrade)"
     }
 }
 
@@ -172,17 +163,14 @@ if ($fwCurrent) {
 }
 
 # --- Layer 3: camera health (the ticket states) ---
-$camDevices = Get-PnpDevice -Class Camera,Image -PresentOnly
+$camDevices = @($entities | Where-Object { $_.PNPClass -in 'Camera', 'Image' })
 $camProblem = @()
 $camDisabled = @()
-$camProbMap = @{}
-Get-PnpDeviceProperty -InstanceId @($camDevices | ForEach-Object { $_.InstanceId }) -KeyName 'DEVPKEY_Device_ProblemCode' -ErrorAction SilentlyContinue |
-    ForEach-Object { $camProbMap[$_.InstanceId] = $_.Data }
 foreach ($c in $camDevices) {
-    $pc = $camProbMap[$c.InstanceId]
-    Write-Output ("CAMERA: {0} [{1}] problem={2}" -f $c.FriendlyName, $c.Status, $pc)
-    if ($pc -eq 22) { $camDisabled += "$($c.FriendlyName) disabled (user/policy)" }
-    elseif ($pc -and $pc -ne 0) { $camProblem += "$($c.FriendlyName) problem code $pc ($($c.Problem))" }
+    $pc = $c.ConfigManagerErrorCode
+    Write-Output ("CAMERA: {0} problem={1}" -f $c.Name, $pc)
+    if ($pc -eq 22) { $camDisabled += "$($c.Name) disabled (user/policy)" }
+    elseif ($pc -and $pc -ne 0) { $camProblem += "$($c.Name) problem code $pc" }
 }
 if ($camDevices.Count -eq 0) {
     Write-Output 'CAMERA: NONE PRESENT - zero camera-class devices = "we can''t find your camera" ticket state'
