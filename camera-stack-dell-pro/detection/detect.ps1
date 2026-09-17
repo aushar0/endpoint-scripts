@@ -116,9 +116,9 @@ $readIds = @($matched | ForEach-Object { $_.e.PNPDeviceID }) | Select-Object -Un
 $prevEap = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 Get-CimInstance Win32_PnPSignedDriver |
-    Select-Object PNPDeviceID, DriverVersion, DriverProviderName, InfName |
-    Where-Object { $_.PNPDeviceID } |
-    ForEach-Object { $drvMap[$_.PNPDeviceID] = $_ }
+    Select-Object DeviceID, DriverVersion, DriverProviderName, InfName |
+    Where-Object { $_.DeviceID } |
+    ForEach-Object { $drvMap[$_.DeviceID] = [pscustomobject]@{ PNPDeviceID = $_.DeviceID; DriverVersion = $_.DriverVersion; DriverProviderName = $_.DriverProviderName; InfName = $_.InfName } }
 $ErrorActionPreference = $prevEap
 $missingIds = @($readIds | Where-Object { -not $drvMap[$_] })
 if ($missingIds.Count -gt 0) {
