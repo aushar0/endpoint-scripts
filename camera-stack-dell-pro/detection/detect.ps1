@@ -97,9 +97,7 @@ $needs   = @()
 $stackProblem = @()
 $stackDisabled = @()
 $entities = Get-CimInstance Win32_PnPEntity -Property PNPDeviceID, HardwareID, ConfigManagerErrorCode, PNPClass, Name
-$drvMap = @{}
-Get-CimInstance Win32_PnPSignedDriver -Property PNPDeviceID, DriverVersion, DriverProviderName, InfName |
-    Where-Object { $_.PNPDeviceID } | ForEach-Object { $drvMap[$_.PNPDeviceID] = $_ }
+$drvMap = @{}   # populated after $matched (fallback needs the matched id set)
 $matched = @()
 foreach ($e in $entities) {
     $hw = $e.HardwareID
@@ -107,6 +105,28 @@ foreach ($e in $entities) {
     $hwj = $hw -join ';'
     foreach ($t in $targets) {
         if ($hwj -match $t.re) { $matched += [pscustomobject]@{ e = $e; t = $t }; break }
+    }
+}
+
+$readIds = @($matched | ForEach-Object { $_.e.PNPDeviceID }) | Select-Object -Unique
+# Win32_PnPSignedDriver quirks (verified live 2026-09-10): rejects -Property and
+# -Filter WQL forms ("Invalid query") and returns ZERO rows under EAP
+# SilentlyContinue - scope Continue around it, fall back to per-device reads
+# (the always-reliable path) when the map comes back thin.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+Get-CimInstance Win32_PnPSignedDriver |
+    Select-Object PNPDeviceID, DriverVersion, DriverProviderName, InfName |
+    Where-Object { $_.PNPDeviceID } |
+    ForEach-Object { $drvMap[$_.PNPDeviceID] = $_ }
+$ErrorActionPreference = $prevEap
+$missingIds = @($readIds | Where-Object { -not $drvMap[$_] })
+if ($missingIds.Count -gt 0) {
+    foreach ($id in $missingIds) {
+        $v = (Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_DriverVersion' -ErrorAction SilentlyContinue).Data
+        $p = (Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_DriverProvider' -ErrorAction SilentlyContinue).Data
+        $i = (Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_DriverInfPath' -ErrorAction SilentlyContinue).Data
+        if ($v -or $p -or $i) { $drvMap[$id] = [pscustomobject]@{ PNPDeviceID = $id; DriverVersion = $v; DriverProviderName = $p; InfName = $i } }
     }
 }
 
