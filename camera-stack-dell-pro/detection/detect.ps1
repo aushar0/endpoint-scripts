@@ -89,40 +89,53 @@ $targets = @(
     @{ n = 'Vision-ARL';        re = 'INTC10E0';                                                     v = '41.3.10000.40' }
 )
 
-function Get-ProblemCode($instanceId) {
-    (Get-PnpDeviceProperty -InstanceId $instanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
-}
-
-# --- Layer 1: driver versions vs targets (present devices only) ---
+# --- Layer 1: driver versions vs targets (BATCHED reads - one CIM call per key) ---
 $needs   = @()
 $stackProblem = @()
 $stackDisabled = @()
 $Device  = Get-PnpDevice -PresentOnly
+$ids = @($Device | ForEach-Object { $_.InstanceId })
+$hwMap = @{}
+Get-PnpDeviceProperty -InstanceId $ids -KeyName 'DEVPKEY_Device_HardwareIds' |
+    ForEach-Object { $hwMap[$_.InstanceId] = $_.Data }
+$matched = @()
 foreach ($d in $Device) {
-    $hw = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds').Data
+    $hw = $hwMap[$d.InstanceId]
     if (-not $hw) { continue }
-    $hw = $hw -join ';'
+    $hwj = $hw -join ';'
     foreach ($t in $targets) {
-        if ($hw -match $t.re) {
-            $cur = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion').Data
-            $ok  = $cur -and ([version]$cur -ge [version]$t.v)
-            $curTxt = if ($cur) { $cur } else { 'NO-DRIVER' }
-            Write-Output ("{0,-18} status={1,-10} installed={2,-20} target={3,-20} {4}" -f `
-                $t.n, $d.Status, $curTxt, $t.v, $(if ($ok) { 'OK' } else { 'OLD' }))
-            if (-not $ok) { $needs += "$($t.n): $curTxt -> $($t.v)" }
-            # Layer 3a: problem codes on any stack devnode (22 = disabled = deliberate, not a fault)
-            $pc = Get-ProblemCode $d.InstanceId
-            if ($pc -eq 22) { $stackDisabled += "$($t.n) disabled (user/policy)" }
-            elseif ($pc -and $pc -ne 0) { $stackProblem += "$($t.n) problem code $pc ($($d.Problem))" }
-            # Upgrade-casualty signature: our Intel hardware bound to an inbox/OS
-            # driver (verified property keys: DriverProvider / DriverInfPath)
-            $prov   = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverProvider').Data
-            $infPth = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverInfPath').Data
-            if ($prov -match 'Microsoft' -or $infPth -match 'usbvideo\.inf') {
-                $stackProblem += "$($t.n): Intel hardware on inbox driver ($infPth / $prov) - stack misbound (typical after OS upgrade)"
-            }
-            break
-        }
+        if ($hwj -match $t.re) { $matched += [pscustomobject]@{ d = $d; t = $t }; break }
+    }
+}
+$readIds = @($matched | ForEach-Object { $_.d.InstanceId }) | Select-Object -Unique
+function New-Map($KeyName) {
+    $m = @{}
+    Get-PnpDeviceProperty -InstanceId $readIds -KeyName $KeyName -ErrorAction SilentlyContinue |
+        ForEach-Object { $m[$_.InstanceId] = $_.Data }
+    return $m
+}
+$verMap = New-Map 'DEVPKEY_Device_DriverVersion'
+$provMap = New-Map 'DEVPKEY_Device_DriverProvider'
+$infMap = New-Map 'DEVPKEY_Device_DriverInfPath'
+$probMap = New-Map 'DEVPKEY_Device_ProblemCode'
+
+foreach ($m in $matched) {
+    $d = $m.d; $t = $m.t
+    $cur = $verMap[$d.InstanceId]
+    $ok  = $cur -and ([version]$cur -ge [version]$t.v)
+    $curTxt = if ($cur) { $cur } else { 'NO-DRIVER' }
+    Write-Output ("{0,-18} status={1,-10} installed={2,-20} target={3,-20} {4}" -f `
+        $t.n, $d.Status, $curTxt, $t.v, $(if ($ok) { 'OK' } else { 'OLD' }))
+    if (-not $ok) { $needs += "$($t.n): $curTxt -> $($t.v)" }
+    # problem codes on any stack devnode (22 = disabled = deliberate, not a fault)
+    $pc = $probMap[$d.InstanceId]
+    if ($pc -eq 22) { $stackDisabled += "$($t.n) disabled (user/policy)" }
+    elseif ($pc -and $pc -ne 0) { $stackProblem += "$($t.n) problem code $pc ($($d.Problem))" }
+    # Upgrade-casualty signature: our Intel hardware bound to an inbox/OS driver
+    $prov   = $provMap[$d.InstanceId]
+    $infPth = $infMap[$d.InstanceId]
+    if ($prov -match 'Microsoft' -or $infPth -match 'usbvideo\.inf') {
+        $stackProblem += "$($t.n): Intel hardware on inbox driver ($infPth / $prov) - stack misbound (typical after OS upgrade)"
     }
 }
 
@@ -162,8 +175,11 @@ if ($fwCurrent) {
 $camDevices = Get-PnpDevice -Class Camera,Image -PresentOnly
 $camProblem = @()
 $camDisabled = @()
+$camProbMap = @{}
+Get-PnpDeviceProperty -InstanceId @($camDevices | ForEach-Object { $_.InstanceId }) -KeyName 'DEVPKEY_Device_ProblemCode' -ErrorAction SilentlyContinue |
+    ForEach-Object { $camProbMap[$_.InstanceId] = $_.Data }
 foreach ($c in $camDevices) {
-    $pc = Get-ProblemCode $c.InstanceId
+    $pc = $camProbMap[$c.InstanceId]
     Write-Output ("CAMERA: {0} [{1}] problem={2}" -f $c.FriendlyName, $c.Status, $pc)
     if ($pc -eq 22) { $camDisabled += "$($c.FriendlyName) disabled (user/policy)" }
     elseif ($pc -and $pc -ne 0) { $camProblem += "$($c.FriendlyName) problem code $pc ($($c.Problem))" }

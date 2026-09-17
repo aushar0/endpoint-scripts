@@ -1,17 +1,24 @@
 <#
 HW9TN_pr_detect.ps1 - Intune Remediations DETECTION script (exit 0/1 ONLY)
 
+Performance design (2026-09-09): all PnP properties are read in BATCHED CIM
+calls (Get-PnpDeviceProperty accepts an array of instance IDs) - one call per
+property key instead of one call per device. A full-stack scan runs in seconds
+and leaves the machine alone: a handful of WMI queries, no writes, no process
+or service interaction.
+
 Remediations gate: remediation runs ONLY when detection exits exactly 1.
 Map:
   exit 0 + "compliant"                 -> healthy, nothing to do
-  exit 0 + "BROKEN-CURRENT" banner     -> camera problem with current drivers:
+  exit 0 + BROKEN-CURRENT banner       -> camera problem with current drivers:
         dependency route (Dell KB 000248760): BIOS camera enable, chipset,
         graphics, ISH, Serial I/O, ME. NOT fixed by this driver package.
-        Banner is visible in the detection-output column = fleet telemetry.
+        The banner is visible in the detection-output column = fleet telemetry.
   exit 1                               -> below target OR misbound -> remediate
   non-target hardware                  -> exit 0 silent (no non-compliance noise)
 
-Read-only, no waits, runs in seconds. Schedule: daily, e.g. 19:00 local.
+Output order: verdict headline FIRST (survives column-preview truncation),
+then detail lines. Keep total output under 4 KB (Intune truncation limit).
 #>
 param([switch]$ForceScan)   # bypass the model gate (testing on non-target machines)
 
@@ -47,57 +54,79 @@ $targets = @(
     @{ n = 'Vision-ARL';        re = 'INTC10E0';                                                     v = '41.3.10000.40' }
 )
 
-$needs = @(); $misbound = @(); $problem = @(); $disabled = @(); $found = 0
-foreach ($d in (Get-PnpDevice -PresentOnly)) {
-    $hw = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds').Data
+# --- Batched device snapshot: 1 fleet-wide call for hardware IDs ---
+$devices = Get-PnpDevice -PresentOnly
+$ids = @($devices | ForEach-Object { $_.InstanceId })
+$hwMap = @{}
+Get-PnpDeviceProperty -InstanceId $ids -KeyName 'DEVPKEY_Device_HardwareIds' |
+    ForEach-Object { $hwMap[$_.InstanceId] = $_.Data }
+
+# match devices to family rows, and collect camera + dependency devices
+$matched = @(); $camIds = @(); $depIds = @()
+foreach ($d in $devices) {
+    if ($d.Class -in 'Camera', 'Image') { $camIds += $d.InstanceId }
+    if ($d.FriendlyName -match 'Integrated Sensor Solution|Serial IO|Management Engine') { $depIds += $d.InstanceId }
+    $hw = $hwMap[$d.InstanceId]
     if (-not $hw) { continue }
-    $hw = $hw -join ';'
+    $hwj = $hw -join ';'
     foreach ($t in $targets) {
-        if ($hw -match $t.re) {
-            $found++
-            $cur = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion').Data
-            if (-not $cur -or [version]$cur -lt [version]$t.v) { $needs += "$($t.n): $(if ($cur) { $cur } else { 'NONE' }) -> $($t.v)" }
-            $pc = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
-            if ($pc -eq 22) { $disabled += "$($t.n) disabled (CM_PROB_DISABLED - user/policy choice; a driver update will not enable it)" }
-            elseif ($pc -and $pc -ne 0) { $problem += "$($t.n) code $pc" }
-            $prov = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverProvider').Data
-            $infP = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverInfPath').Data
-            if ($prov -match 'Microsoft' -or $infP -match 'usbvideo\.inf') { $misbound += "$($t.n) on inbox driver" }
-            break
-        }
+        if ($hwj -match $t.re) { $matched += [pscustomobject]@{ d = $d; t = $t }; break }
     }
 }
-$camCount = @(Get-PnpDevice -Class Camera,Image -PresentOnly).Count
-if ($camCount -eq 0 -and $disabled.Count -eq 0) { $problem += 'no camera devices present' }
-foreach ($c in (Get-PnpDevice -Class Camera,Image -PresentOnly)) {
-    $cpc = (Get-PnpDeviceProperty -InstanceId $c.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
-    if ($cpc -eq 22) { $disabled += "$($c.FriendlyName) disabled" }
-    elseif ($cpc -and $cpc -ne 0) { $problem += "$($c.FriendlyName) code $cpc" }
+$stackIds = @($matched | ForEach-Object { $_.d.InstanceId })
+
+# --- Batched property reads: one call per key for stack + camera + dep devices ---
+$readIds = @($stackIds + $camIds + $depIds) | Select-Object -Unique
+function New-Map($KeyName) {
+    $m = @{}
+    Get-PnpDeviceProperty -InstanceId $readIds -KeyName $KeyName -ErrorAction SilentlyContinue |
+        ForEach-Object { $m[$_.InstanceId] = $_.Data }
+    return $m
 }
+$verMap  = New-Map 'DEVPKEY_Device_DriverVersion'
+$provMap = New-Map 'DEVPKEY_Device_DriverProvider'
+$infMap  = New-Map 'DEVPKEY_Device_DriverInfPath'
+$probMap = New-Map 'DEVPKEY_Device_ProblemCode'
+
+# --- evaluate ---
+$needs = @(); $misbound = @(); $problem = @(); $disabled = @(); $found = 0
+foreach ($m in $matched) {
+    $found++
+    $cur = $verMap[$m.d.InstanceId]
+    if (-not $cur -or [version]$cur -lt [version]$m.t.v) { $needs += "$($m.t.n): $(if ($cur) { $cur } else { 'NONE' }) -> $($m.t.v)" }
+    $pc = $probMap[$m.d.InstanceId]
+    if ($pc -eq 22) { $disabled += "$($m.t.n) disabled (CM_PROB_DISABLED - user/policy choice; a driver update will not enable it)" }
+    elseif ($pc -and $pc -ne 0) { $problem += "$($m.t.n) code $pc" }
+    if ($provMap[$m.d.InstanceId] -match 'Microsoft' -or $infMap[$m.d.InstanceId] -match 'usbvideo\.inf') { $misbound += "$($m.t.n) on inbox driver" }
+}
+foreach ($cid in $camIds) {
+    $cpc = $probMap[$cid]
+    $fname = ($devices | Where-Object InstanceId -eq $cid).FriendlyName
+    if ($cpc -eq 22) { $disabled += "$fname disabled" }
+    elseif ($cpc -and $cpc -ne 0) { $problem += "$fname code $cpc" }
+}
+$camCount = $camIds.Count
+if ($camCount -eq 0 -and $disabled.Count -eq 0) { $problem += 'no camera devices present' }
 $fsErr = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-MF-FrameServer/Camera_FrameServer'; Level = 1,2,3; StartTime = (Get-Date).AddDays(-7) }).Count
 if ($fsErr -ge 5) { $problem += "$fsErr FrameServer errors in 7d" }
 
 # --- RCA context (read-only; feeds the detection-output column fleet-wide) ---
 $os = Get-CimInstance Win32_OperatingSystem
-$firstErr = Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-MF-FrameServer/Camera_FrameServer'; Level = 1,2 } -Oldest -ErrorAction SilentlyContinue | Select-Object -First 1
+$firstErr = Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-MF-FrameServer/Camera_FrameServer'; Level = 1,2 } -Oldest -MaxEvents 1 -ErrorAction SilentlyContinue
 $delta = if ($firstErr) { [int](($firstErr.TimeCreated - $os.InstallDate).TotalHours) } else { $null }
 $out += ("HW9TN|ctx|bios={0}|build={1}|os_changed={2:yyyy-MM-dd}|winold={3}" -f `
     (Get-CimInstance Win32_BIOS).SMBIOSBIOSVersion, $os.BuildNumber, $os.InstallDate, (Test-Path 'C:\Windows.old'))
-function Get-DepVer($Pattern) {
-    $d = Get-PnpDevice -PresentOnly | Where-Object { $_.FriendlyName -match $Pattern } | Select-Object -First 1
-    if ($d) { $v = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion').Data; if ($v) { return $v } }
-    return 'missing'
+$depNames = @{ 'Integrated Sensor Solution' = 'ish'; 'Serial IO' = 'serialio'; 'Management Engine' = 'me' }
+$depLine = foreach ($k in $depNames.Keys) {
+    $did = ($devices | Where-Object { $_.FriendlyName -match $k } | Select-Object -First 1).InstanceId
+    '{0}={1}' -f $depNames[$k], $(if ($did -and $verMap[$did]) { $verMap[$did] } else { 'missing' })
 }
-$out += ("HW9TN|dep|ish={0}|serialio={1}|me={2}" -f `
-    (Get-DepVer 'Integrated Sensor Solution'), (Get-DepVer 'Serial IO'), (Get-DepVer 'Management Engine'))
+$out += ('HW9TN|dep|' + ($depLine -join '|'))
 $out += ("HW9TN|rca|first_err={0}|upgraded={1:yyyy-MM-dd HH:mm}|delta={2}" -f `
     $(if ($firstErr) { $firstErr.TimeCreated.ToString('yyyy-MM-ddTHH:mm') } else { 'none-in-retention' }),
     $os.InstallDate, $(if ($null -ne $delta) { "{0}h" -f $delta } else { 'n/a' }))
 
 # --- firmware-payload proxy (registry layout confirmed on live hardware) ---
-# CurrentFWVersion carries the Synaptics vision-extension INF version; >= 133.152.66.0
-# <=> firmware family >= 8.5.98.42 (shipped in both current packages). Target/Update
-# stay 0.0.0.0 by design - never a signal.
 $fwExtTarget = '133.152.66.0'
 $fwCurrent = $null
 foreach ($root in 'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10E0',
