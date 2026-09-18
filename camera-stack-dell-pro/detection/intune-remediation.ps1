@@ -1,170 +1,416 @@
 <#
-HW9TN_pr_remediate.ps1 - Intune Remediations REMEDIATION script
-Runs after HW9TN_pr_detect.ps1 exits 1. Budget: 60 min hard cap (Intune
-remediations timeout = 3600s) -> download+extract (~5m) + patient wait
-(default 45m) + install (~2m) + sweep fits. Daily recurrence = the retry
-engine: whatever misses today's window gets the next day's run.
+.SYNOPSIS
+    Installs the Intel camera driver stack on a Dell Pro laptop, waits for an
+    idle camera, cleans up superseded driver packages, and verifies the result.
 
-Flow: gate -> pick family package -> cache/download -> verify signature ->
-silent-extract -> patient camera-idle wait -> pnputil install -> re-enumerate
--> old-driver cleanup sweep (delete only UNBOUND superseded family packages)
--> verify + report. Restarts stay user-paced: pending-reboot states ride the
-user's natural reboot; nothing is ever forced, killed, or prompted.
+.DESCRIPTION
+    This script is the remediation half of an Intune Remediations package.
+    It runs only after the detection script (intune-detection.ps1) exits 1,
+    meaning at least one camera-stack component is below its target version
+    or Intel hardware is bound to a generic Windows inbox driver.
 
-Stage/cache: C:\ProgramData\DellCamera\<package-id>\v<version>\
-  EXE kept between runs (95 MB) -> second occurrence onward is download-free.
+    Intune imposes a 60-minute hard timeout on remediation scripts. This
+    script's phases are budgeted to fit within that window:
 
-Params:
-  -LocalPackage <path>  use a local EXE instead of downloading (testing)
-  -MaxWaitMinutes 45    patient wait for camera-idle
-  -PollMinutes 10       poll interval
+        Package download (~5 min)
+        Camera idle wait (45 min default, configurable)
+        Driver installation (~2 min)
+        Driver-store cleanup (~1 min)
+
+    If the camera stays in use for the entire wait window, the script exits
+    without making any changes. The next scheduled run retries; the daily
+    recurrence is the retry mechanism.
+
+    The script never prompts, never closes applications, and never forces a
+    restart. If a device needs a restart to finish initialization, the script
+    exits with code 3010 (success, restart pending) and the restart happens
+    at the user's own discretion.
+
+.NOTES
+    File name          : intune-remediation.ps1
+    Requires           : Windows 11, PowerShell 5.1+, administrator (Intune
+                         Remediations runs as SYSTEM by default)
+    Run frequency      : Same schedule as the detection script
+    Paired with        : intune-detection.ps1
+    Exit code 3010     : Installed successfully; one or more devices finish
+                         initialization at the next restart. The old driver
+                         keeps the camera working until then.
+    Driver package     : Downloaded from Dell at run time; never committed
+                         to the repository.
+
+.HOW IT WORKS
+    1. Hardware gate. Same as the detection script: only Dell Pro models
+       PB14250 and PA14250 proceed. Everything else exits silently.
+
+    2. Camera idle wait. The script polls the Windows CapabilityAccessManager
+       consent store (~registry) to determine whether any application is
+       actively streaming the camera. A camera in use means the driver stack
+       is live and must not be touched. A laptop that is on a call, locked
+       while on a call, or has any camera-consuming app open will wait.
+       A tray-idle Teams instance does not count (it is not streaming).
+
+    3. Package acquisition. The Dell driver package (HW9TN or 845M5 depending
+       on model family) is downloaded from dl.dell.com via BITS and verified:
+       the Authenticode signature must be from Dell. A SHA-256 hash is also
+       checked when one is published for the package. For air-gapped machines
+       or testing, the -LocalPackage parameter points to a local copy.
+
+    4. Extraction. The Dell Update Package is silently extracted using its
+       built-in /s /e switches, yielding the raw driver INF files.
+
+    5. Installation. Each INF is staged and installed via pnputil
+       (/add-driver /install). This is the standard Windows PnP installation
+       path; no vendor installer runs. A device rescan follows.
+
+    6. Rebind recovery. Devices that did not recover on their own after the
+       rescan are explicitly restarted via pnputil /restart-device. This
+       catches devices that need a nudge to pick up the new driver without
+       requiring a full restart. Devices disabled by user choice (problem
+       code 22) are never touched.
+
+    7. Cleanup. Superseded driver packages (same INF name, older version,
+       no device bound to them) are removed from the driver store. This is
+       the hygiene step that prevents the mixed-generation residue left by
+       Windows feature updates - the condition Dell's KB 000248760 identifies
+       as the root cause of these camera failures.
+
+    8. Verification. The script checks whether the camera is now present and
+       healthy. If any device still reports a problem, the Windows
+       setupapi.dev.log is filtered to camera-related entries and saved as
+       forensic evidence for troubleshooting.
+
+.LINK
+    Dell KB 000248760: https://www.dell.com/support/kbdoc/en-us/000248760/
 #>
-[CmdletBinding()]
-param(
-    [string]$LocalPackage,
-    [int]$MaxWaitMinutes = 45,
-    [int]$PollMinutes = 10
-)
+
+# =============================================================================
+# PARAMETERS
+# =============================================================================
+
+# Path to a local copy of the driver package EXE, used instead of downloading.
+# For air-gapped machines or manual testing.
+param([string]$LocalPackage = '')
+
+# Minutes to wait for the camera to become idle before giving up.
+# Default 45; the Intune Remediations 60-minute cap allows ~50 minutes
+# of waiting plus ~10 minutes for the remaining phases.
+[Int]$MaxWaitMinutes = 45
+
+# Minutes between camera-in-use checks during the wait.
+[Int]$PollMinutes = 10
+
+# =============================================================================
+# INITIALIZATION
+# =============================================================================
+
 $ErrorActionPreference = 'Continue'
 
-# --- Layer 0: gate + family pick ---
-$sp = Get-CimInstance Win32_ComputerSystemProduct
-$bb = Get-CimInstance Win32_BaseBoard
-$cs = Get-CimInstance Win32_ComputerSystem
-$sig = @($sp.Version, $sp.Name, $bb.Product, $cs.Model) -join ' '
-if ($sig -notmatch 'P[AB]14250') { Write-Output 'not a target machine - nothing to do'; exit 0 }
-$family = if ($sig -match 'PA14250') { 'PA' } else { 'PB' }
+# =============================================================================
+# HARDWARE GATE
+# =============================================================================
 
-# --- family package manifest ---
-$manifest = @{
-    PB = @{ id = 'HW9TN'; version = '80.26100.0.29-A13'
-            url  = 'https://dl.dell.com/FOLDER14812487M/1/Intel-2D-Imaging-USB-IO-Vision-Driver-for-Camera_HW9TN_WIN64_80.26100.0.29_A13.EXE'
-            exe  = 'Intel-2D-Imaging-USB-IO-Vision-Driver-for-Camera_HW9TN_WIN64_80.26100.0.29_A13.EXE'
-            sha256 = $null }
-    PA = @{ id = '845M5'; version = '80.25982.6.32-A12'
-            url  = ''   # TODO: grab direct dl.dell.com link from browser download once PA fleet matters
-            exe  = 'Intel-2D-Imaging-Vision-USB-Bridge-Driver-for-Camera_845M5_WIN64_80.25982.6.32_A12.EXE'
-            sha256 = 'D96D301FF7092C4F172EDB2F713BC2626FC3C5FB77C52D1560586DA901FFDB66' }
-}
-$pkg = $manifest[$family]
-$stage = "C:\ProgramData\DellCamera\$($pkg.id)\v$($pkg.version)"
-New-Item -ItemType Directory -Force -Path $stage | Out-Null
-Write-Output "family=$family package=$($pkg.id) $($pkg.version) stage=$stage"
+$systemProduct  = Get-CimInstance Win32_ComputerSystemProduct
+$baseBoard      = Get-CimInstance Win32_BaseBoard
+$computerSystem = Get-CimInstance Win32_ComputerSystem
+$modelSignature = @($systemProduct.Version, $systemProduct.Name, $baseBoard.Product, $computerSystem.Model) -join ' '
 
-# --- obtain the package EXE (cache > local override > download) ---
-$exePath = Join-Path $stage $pkg.exe
-if (-not (Test-Path $exePath) -and $LocalPackage -and (Test-Path $LocalPackage)) {
-    Copy-Item $LocalPackage $exePath -Force
-    Write-Output "obtained package from local override: $LocalPackage"
-}
-if (-not (Test-Path $exePath)) {
-    if (-not $pkg.url) { Write-Output "no download URL configured for $($pkg.id) and no local package - exiting"; exit 1 }
-    Write-Output "downloading $($pkg.exe) ($([math]::Round(95,1)) MB class) via BITS..."
-    try { Start-BitsTransfer -Source $pkg.url -Destination $exePath -ErrorAction Stop }
-    catch { Write-Output "download failed: $($_.Exception.Message) - next scheduled run retries"; exit 1 }
+if ($modelSignature -notmatch 'P[AB]14250') {
+    Write-Output 'Not a supported model. Nothing to do.'
+    exit 0
 }
 
-# --- integrity: Authenticode signer (always) + SHA-256 (when known) ---
-$sigChk = Get-AuthenticodeSignature $exePath
-if ($sigChk.Status -ne 'Valid' -or $sigChk.SignerCertificate.Subject -notmatch 'Dell') {
-    Write-Output "SIGNATURE CHECK FAILED ($($sigChk.Status)) - refusing to run"; exit 1
-}
-if ($pkg.sha256) {
-    $h = (Get-FileHash $exePath -Algorithm SHA256).Hash
-    if ($h -ne $pkg.sha256) { Write-Output 'SHA-256 mismatch - refusing to run'; exit 1 }
-}
-Write-Output 'package verified (Authenticode Dell-signed' + $(if ($pkg.sha256) { ' + SHA-256 match' } else { '' }) + ')'
+$modelFamily = if ($modelSignature -match 'PA14250') { 'PA' } else { 'PB' }
 
-# --- silent-extract the DUP ---
-$exDir = Join-Path $stage 'extract'
-if (-not (Test-Path "$exDir\16299")) {
-    New-Item -ItemType Directory -Force -Path $exDir | Out-Null
-    Write-Output 'extracting package (DUP silent extract /s /e)...'
-    $p = Start-Process -FilePath $exePath -ArgumentList "/s /e /f=`"$exDir`"" -Wait -PassThru -WindowStyle Hidden
-    Write-Output "extract exit code: $($p.ExitCode)"
-}
-$infs = @(Get-ChildItem "$exDir\16299\Drivers" -Recurse -Filter *.inf)
-if ($infs.Count -eq 0) { Write-Output 'no INFs found after extraction - package layout changed?'; exit 1 }
-Write-Output "payload ready: $($infs.Count) INF files"
+# =============================================================================
+# PACKAGE MANIFEST
+# =============================================================================
+# Each family has one driver package. The URL is the direct Dell download link.
+# SHA-256 is checked when Dell publishes one for the package.
 
-# --- patient wait: camera idle (consent store), bounded by the 60-min cap ---
+$packageManifest = @{
+    PB = @{
+        PackageId      = 'HW9TN'
+        PackageVersion = '80.26100.0.29-A13'
+        DownloadUrl    = 'https://dl.dell.com/FOLDER14812487M/1/Intel-2D-Imaging-USB-IO-Vision-Driver-for-Camera_HW9TN_WIN64_80.26100.0.29_A13.EXE'
+        PackageFileName = 'Intel-2D-Imaging-USB-IO-Vision-Driver-for-Camera_HW9TN_WIN64_80.26100.0.29_A13.EXE'
+        Sha256Hash     = $null
+    }
+    PA = @{
+        PackageId      = '845M5'
+        PackageVersion = '80.25982.6.32-A12'
+        DownloadUrl    = ''
+        PackageFileName = 'Intel-2D-Imaging-Vision-USB-Bridge-Driver-for-Camera_845M5_WIN64_80.25982.6.32_A12.EXE'
+        Sha256Hash     = 'D96D301FF7092C4F172EDB2F713BC2626FC3C5FB77C52D1560586DA901FFDB66'
+    }
+}
+
+# Camera-stack INF file names - used by the cleanup phase to identify which
+# driver-store packages belong to this deployment and are safe to remove.
+$cameraStackInfNames = @(
+    'iacamera64.inf', 'hm1092.inf', 'ov05c10.inf', 'ov08x40.inf', 'iactrllogic64.inf',
+    'iaisp64.inf', 'usbbridge.inf', 'usbgpio.inf', 'usbi2c.inf', 'vision.inf', 'visionextension.inf'
+)
+
+# Hardware-ID patterns for identifying stack devices during the rebind and
+# verification phases (same patterns as the detection script).
+$cameraStackHardwareIdPattern = 'VEN_8086&DEV_(7D51|7DD1|7D41|7D67|B640|64A0|6420|64B0|7D19|645D|5A19).*INT3480|VEN_HIMX&DEV_1092|VEN_OVTI&DEV_(05C1|08F4)|VEN_INT&DEV_(3472|346F)|VID_8086&PID_0B63|VID_2AC1&PID_20C[19B]|VID_06CB&PID_0701|INTC10B5|INTC10B6|INTC10E0|INTC10DE'
+
+# Working folder: the extracted package, download cache, and logs all live here.
+$selectedPackage = $packageManifest[$modelFamily]
+$workingFolder = "C:\ProgramData\DellCamera\$($selectedPackage.PackageId)\v$($selectedPackage.PackageVersion)"
+New-Item -ItemType Directory -Force -Path $workingFolder | Out-Null
+Write-Output "Model family: $modelFamily | Package: $($selectedPackage.PackageId) v$($selectedPackage.PackageVersion)"
+Write-Output "Working folder: $workingFolder"
+
+# =============================================================================
+# PACKAGE ACQUISITION
+# =============================================================================
+# Order of preference: cached copy in the working folder, local override via
+# -LocalPackage, then download from Dell. The cache means the second and later
+# runs on the same machine skip the download entirely.
+
+$packageFilePath = Join-Path $workingFolder $selectedPackage.PackageFileName
+
+if (-not (Test-Path $packageFilePath) -and $LocalPackage -and (Test-Path $LocalPackage)) {
+    Copy-Item $LocalPackage $packageFilePath -Force
+    Write-Output "Using local package copy: $LocalPackage"
+}
+
+if (-not (Test-Path $packageFilePath)) {
+    if (-not $selectedPackage.DownloadUrl) {
+        Write-Output "No download URL configured for package $($selectedPackage.PackageId). Exiting."
+        exit 1
+    }
+    Write-Output "Downloading $($selectedPackage.PackageFileName) via BITS..."
+    try {
+        Start-BitsTransfer -Source $selectedPackage.DownloadUrl -Destination $packageFilePath -ErrorAction Stop
+    } catch {
+        Write-Output "Download failed: $($_.Exception.Message). The next scheduled run will retry."
+        exit 1
+    }
+}
+
+# Verify the package before running it: the Authenticode signature must be
+# from Dell. When a SHA-256 hash is known, verify that too.
+$signatureCheck = Get-AuthenticodeSignature $packageFilePath
+if ($signatureCheck.Status -ne 'Valid' -or $signatureCheck.SignerCertificate.Subject -notmatch 'Dell') {
+    Write-Output "Package signature verification FAILED ($($signatureCheck.Status)). Refusing to run."
+    exit 1
+}
+if ($selectedPackage.Sha256Hash) {
+    $actualHash = (Get-FileHash $packageFilePath -Algorithm SHA256).Hash
+    if ($actualHash -ne $selectedPackage.Sha256Hash) {
+        Write-Output 'Package SHA-256 hash mismatch. Refusing to run.'
+        exit 1
+    }
+}
+Write-Output 'Package verified (Dell-signed).'
+
+# =============================================================================
+# PACKAGE EXTRACTION
+# =============================================================================
+# The Dell Update Package supports silent extraction via /s /e /f=<folder>.
+# The extracted tree contains the raw INF/SYS/CAT files under .\16299\Drivers\.
+
+$extractionFolder = Join-Path $workingFolder 'extract'
+
+if (-not (Test-Path "$extractionFolder\16299")) {
+    New-Item -ItemType Directory -Force -Path $extractionFolder | Out-Null
+    Write-Output 'Extracting driver package (silent extraction)...'
+    $extractionProcess = Start-Process -FilePath $packageFilePath `
+        -ArgumentList "/s /e /f=`"$extractionFolder`"" `
+        -Wait -PassThru -WindowStyle Hidden
+    Write-Output "Extraction exit code: $($extractionProcess.ExitCode)"
+}
+
+$driverInfFiles = @(Get-ChildItem "$extractionFolder\16299\Drivers" -Recurse -Filter *.inf)
+if ($driverInfFiles.Count -eq 0) {
+    Write-Output 'No INF files found after extraction. The package layout may have changed.'
+    exit 1
+}
+Write-Output "Driver payload ready: $($driverInfFiles.Count) INF files."
+
+# =============================================================================
+# CAMERA IDLE WAIT
+# =============================================================================
+# Poll the Windows CapabilityAccessManager consent store to determine whether
+# any application is actively streaming the camera. The registry value
+# LastUsedTimeStop is 0 while an app is streaming and a timestamp when it
+# stops. This is the same mechanism Windows uses for the camera-in-use
+# indicator, so it catches every application: Teams, Zoom, WebEx, Chrome,
+# Edge, the Windows Camera app, and anything else.
+#
+# A laptop that is on a call will wait. A locked laptop that is still on a
+# call will wait (the call continues at the lock screen). A laptop with Teams
+# idling in the system tray will NOT wait (Teams is not streaming).
+#
+# This is the core of the no-disturbance design: never touch a driver stack
+# that is actively serving a camera stream.
+
 function Test-CameraStreaming {
-    foreach ($hive in (Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue)) {
-        $root = "$($hive.PSPath)\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam"
-        if (-not (Test-Path $root)) { continue }
-        foreach ($app in (Get-ChildItem "$root\*", "$root\NonPackaged\*" -ErrorAction SilentlyContinue)) {
-            if ((Get-ItemProperty $app.PSPath -ErrorAction SilentlyContinue).LastUsedTimeStop -eq 0) { return $true }
+    foreach ($userHive in (Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue)) {
+        $consentStorePath = "$($userHive.PSPath)\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam"
+        if (-not (Test-Path $consentStorePath)) { continue }
+        foreach ($appEntry in (Get-ChildItem "$consentStorePath\*", "$consentStorePath\NonPackaged\*" -ErrorAction SilentlyContinue)) {
+            if ((Get-ItemProperty $appEntry.PSPath -ErrorAction SilentlyContinue).LastUsedTimeStop -eq 0) {
+                return $true
+            }
         }
     }
     return $false
 }
-$deadline = (Get-Date).AddMinutes($MaxWaitMinutes)
-$poll = 0
-while ((Get-Date) -lt $deadline -and (Test-CameraStreaming)) {
-    $poll++
-    Write-Output "poll ${poll}: camera in use - waiting ${PollMinutes}m (deadline $(Get-Date $deadline -Format HH:mm:ss))"
+
+$waitDeadline = (Get-Date).AddMinutes($MaxWaitMinutes)
+$pollAttempt  = 0
+
+while ((Get-Date) -lt $waitDeadline -and (Test-CameraStreaming)) {
+    $pollAttempt++
+    Write-Output "Camera in use. Waiting ${PollMinutes} minutes (attempt $pollAttempt)."
     Start-Sleep -Seconds ($PollMinutes * 60)
 }
+
 if (Test-CameraStreaming) {
-    Write-Output "camera still busy after ${MaxWaitMinutes}m - stopping; tomorrow's scheduled run retries"
+    Write-Output "Camera stayed in use for the full ${MaxWaitMinutes} minutes. No changes made."
+    Write-Output 'The next scheduled run will retry.'
     exit 0
 }
-Write-Output 'camera idle - installing'
+Write-Output 'Camera is idle. Proceeding with installation.'
 
-# --- install: standard PnP, no forced reboot ---
-foreach ($inf in $infs) {
-    $out = & pnputil.exe /add-driver "$($inf.FullName)" /install 2>&1
-    $ok  = ($out | Select-String -SimpleMatch 'success').Count
-    Write-Output "add-driver $($inf.Name): $ok success line(s)"
+# =============================================================================
+# DRIVER INSTALLATION
+# =============================================================================
+# Stage and install every INF in the extracted package via the standard
+# Windows PnP path. The /install flag attempts to bind matching present
+# devices immediately; devices that cannot rebind live will be handled by
+# the rebind phase below or will finalize at the next restart.
+
+$successfullyInstalled = 0
+foreach ($infFile in $driverInfFiles) {
+    $installResult = & pnputil.exe /add-driver "$($infFile.FullName)" /install 2>&1
+    $successLines = ($installResult | Select-String -SimpleMatch 'success').Count
+    if ($successLines -gt 0 -or $LASTEXITCODE -eq 0) { $successfullyInstalled++ }
 }
+Write-Output "Installed $successfullyInstalled of $($driverInfFiles.Count) driver packages."
+
+# Trigger a device rescan so newly staged drivers can bind to any raw or
+# recently enumerated devices.
 & pnputil.exe /scan-devices | Out-Null
-
-# --- Force live rebind: restart devnodes that didn't recover on their own ---
-# Disabled devices (code 22) are never touched - a restart would not enable them.
-foreach ($d in (Get-PnpDevice -PresentOnly)) {
-    $pc2 = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
-    $isCam = $d.Class -in 'Camera', 'Image'
-    if (($isCam -or ($pc2 -and $pc2 -ne 0)) -and $pc2 -ne 22) {
-        $r = & pnputil.exe /restart-device "$($d.InstanceId)" 2>&1
-        Write-Output ("REBIND: {0} [{1}] -> {2}" -f $d.FriendlyName, $pc2, (($r | Select-Object -Last 1) -replace '^\s+', ''))
-    }
-}
 Start-Sleep -Seconds 5
 
-# --- old-driver cleanup: delete UNBOUND superseded family packages only ---
-$familyInfs = 'iacamera64.inf','hm1092.inf','ov05c10.inf','ov08x40.inf','iactrllogic64.inf',
-              'iaisp64.inf','usbbridge.inf','usbgpio.inf','usbi2c.inf','vision.inf','visionextension.inf'
+# =============================================================================
+# REBIND RECOVERY
+# =============================================================================
+# Some devices do not pick up the new driver after a rescan alone. Restarting
+# the device node forces a driver re-evaluation without requiring a full
+# system restart. This catches the "camera present but still on old driver"
+# case and converts it from "reboot required" to "fixed live."
+#
+# Devices disabled by user choice (problem code 22) are excluded: restarting
+# them would not enable them (a driver update does not override a deliberate
+# disable), and the restart would be unnecessary churn.
+
+foreach ($presentDevice in (Get-PnpDevice -PresentOnly)) {
+    $deviceProblemCode = (Get-PnpDeviceProperty -InstanceId $presentDevice.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
+    $isCameraClass = $presentDevice.Class -in 'Camera', 'Image'
+
+    if (($isCameraClass -or ($deviceProblemCode -and $deviceProblemCode -ne 0)) -and $deviceProblemCode -ne 22) {
+        & pnputil.exe /restart-device "$($presentDevice.InstanceId)" 2>&1 | Out-Null
+    }
+}
+
+# =============================================================================
+# DRIVER-STORE CLEANUP
+# =============================================================================
+# Windows feature updates leave superseded driver packages in the store.
+# Over time this residue creates the mixed-generation stack that Dell's
+# KB 000248760 identifies as the root cause of camera failures.
+#
+# Safe deletion rules:
+#   1. Only camera-stack INF names are considered (the list above).
+#   2. Per INF name, the highest-version package is always kept; only older
+#      versions are candidates for deletion. This means the just-installed
+#      package is never removed, even while it is unbound during a pending
+#      restart.
+#   3. A package that any present device is actively using is skipped. It
+#      becomes eligible at the next run after the device moves off it.
+
+$deletedPackages  = @()
+$skippedPackages  = @()
+
 try {
-    $drivers = Get-WindowsDriver -Online -ErrorAction Stop |
-        Where-Object { $_.OriginalFileName -and ($familyInfs -contains $_.OriginalFileName.ToLower()) }
-    if ($drivers) {
-        $boundInfs = @(Get-PnpDevice -PresentOnly | ForEach-Object {
+    $allDriverPackages = Get-WindowsDriver -Online -ErrorAction Stop |
+        Where-Object { $_.OriginalFileName -and ($cameraStackInfNames -contains $_.OriginalFileName.ToLower()) }
+
+    if ($allDriverPackages) {
+        # Build the set of INF files that present devices are currently bound to.
+        $boundInfFiles = @(Get-PnpDevice -PresentOnly | ForEach-Object {
             (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_DriverInfPath').Data
         } | Where-Object { $_ })
-        foreach ($origName in ($drivers | Select-Object -ExpandProperty OriginalFileName -Unique)) {
-            $set  = $drivers | Where-Object OriginalFileName -eq $origName
-            $keep = $set | Sort-Object Version -Descending | Select-Object -First 1
-            foreach ($p in ($set | Where-Object Driver -ne $keep.Driver)) {
-                if ($boundInfs -contains $p.Driver) {
-                    Write-Output "CLEANUP-SKIP: $($p.Driver) ($origName v$($p.Version)) - still bound"
+
+        foreach ($infName in ($allDriverPackages | Select-Object -ExpandProperty OriginalFileName -Unique)) {
+            $packagesWithThisInf = $allDriverPackages | Where-Object OriginalFileName -eq $infName
+            $newestPackage = $packagesWithThisInf | Sort-Object Version -Descending | Select-Object -First 1
+
+            foreach ($olderPackage in ($packagesWithThisInf | Where-Object Driver -ne $newestPackage.Driver)) {
+                if ($boundInfFiles -contains $olderPackage.Driver) {
+                    $skippedPackages += "$($olderPackage.Driver) ($infName v$($olderPackage.Version)) - still in use"
                 } else {
-                    Write-Output "CLEANUP-DELETE: $($p.Driver) ($origName v$($p.Version)) - unbound, superseded"
-                    & pnputil.exe /delete-driver $p.Driver 2>&1 | ForEach-Object { Write-Output "  $_" }
+                    & pnputil.exe /delete-driver $olderPackage.Driver 2>&1 | Out-Null
+                    $deletedPackages += "$($olderPackage.Driver) ($infName v$($olderPackage.Version))"
                 }
             }
         }
-    } else { Write-Output 'CLEANUP: no superseded family packages' }
-} catch { Write-Output "CLEANUP-SKIPPED: enumeration failed - not fatal" }
+    }
+} catch {
+    Write-Output "Driver-store enumeration failed. Cleanup skipped (not fatal)."
+}
 
-# --- final state report (detection output column picks this up) ---
-$pending = 0
-foreach ($d in (Get-PnpDevice -PresentOnly)) {
-    $pc = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
-    if ($pc -eq 14) { $pending++ }
+Write-Output ("Cleanup: {0} superseded package(s) removed, {1} retained (still in use)." -f `
+    $deletedPackages.Count, $skippedPackages.Count)
+
+# =============================================================================
+# VERIFICATION
+# =============================================================================
+# Confirm the camera is now present and healthy. On problems, capture the
+# camera-related entries from setupapi.dev.log as forensic evidence.
+
+$cameraDevicesAfterInstall = @(Get-PnpDevice -Class Camera,Image -PresentOnly)
+$devicesPendingRestart     = 0
+$devicesStillFailing       = 0
+
+foreach ($presentDevice in (Get-PnpDevice -PresentOnly)) {
+    $hardwareIds = (Get-PnpDeviceProperty -InstanceId $presentDevice.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds').Data
+    if (-not $hardwareIds -or (($hardwareIds -join ';') -notmatch $cameraStackHardwareIdPattern)) { continue }
+
+    $problemCode = (Get-PnpDeviceProperty -InstanceId $presentDevice.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
+    if ($problemCode -eq 14) { $devicesPendingRestart++ }
+    if ($problemCode -and $problemCode -ne 0 -and $problemCode -ne 14) { $devicesStillFailing++ }
 }
-if ($pending -gt 0) {
-    Write-Output "INSTALLED - $pending device(s) pending user-paced restart (completes at natural reboot)"
-} else {
-    Write-Output 'INSTALLED - live, no restart needed'
+
+Write-Output ("Camera devices present: {0} | Pending restart: {1} | Still failing: {2}" -f `
+    $cameraDevicesAfterInstall.Count, $devicesPendingRestart, $devicesStillFailing)
+
+# If any device is still failing, capture forensic evidence from the Windows
+# driver-install history log.
+if ($devicesStillFailing -gt 0 -or $cameraDevicesAfterInstall.Count -eq 0) {
+    $setupapiSlicePath = Join-Path $workingFolder 'setupapi_camera_slice.log'
+    Select-String -Path 'C:\Windows\INF\setupapi.dev.log' `
+        -Pattern 'iacamera|hm1092|ov08x40|ov05c10|iactrllogic|iaisp|usbbridge|Vision\.inf' `
+        -ErrorAction SilentlyContinue |
+        ForEach-Object { "{0}: {1}" -f $_.LineNumber, $_.Line } |
+        Set-Content $setupapiSlicePath -Encoding UTF8
+    Write-Output "Forensic evidence saved to: $setupapiSlicePath"
 }
+
+# =============================================================================
+# EXIT CODE
+# =============================================================================
+
+if ($devicesPendingRestart -gt 0 -or $devicesStillFailing -gt 0) {
+    Write-Output "Installed. $devicesPendingRestart device(s) finalize at the next restart."
+    Write-Output 'The restart belongs to the user; it is never forced.'
+    exit 3010
+}
+
+Write-Output 'Installed. Camera stack updated; no restart required.'
 exit 0
