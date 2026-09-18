@@ -392,16 +392,26 @@ if ($currentFirmwareVersion -and ([version]$currentFirmwareVersion -lt [version]
 # to. fsErr7d is a supplementary signal that catches intermittent failures on
 # cameras that otherwise report a clean problem code.
 
-$outdatedComponentNames = (@($outdatedComponents + $misboundComponents) | ForEach-Object { ($_ -split ':')[0] }) -join ','
-$brokenComponentNames   = (@($activeDeviceProblems) | ForEach-Object { ($_ -split ' ')[0] }) -join ','
-
-$verdictHeadline = if ($outdatedComponents.Count -or $misboundComponents.Count) {
-    "NEEDS($($outdatedComponents.Count + $misboundComponents.Count)): $outdatedComponentNames"
+# The verdict word reflects the camera's health, not the driver version state.
+$verdictHeadline = if ($activeDeviceProblems.Count) {
+    "CAMERA_BROKEN($($activeDeviceProblems.Count))"
+} elseif ($deliberatelyDisabled.Count) {
+    'CAMERA_DISABLED'
 } else {
-    'OK'
+    'CAMERA_OK'
 }
-if ($brokenComponentNames)   { $verdictHeadline += " | BROKEN: $brokenComponentNames" }
-if ($deliberatelyDisabled)   { $verdictHeadline += ' | disabled-by-choice' }
+
+# Driver version context: shown in the headline when components are below
+# target. This is informational and does not affect the exit code.
+if ($outdatedComponents.Count -or $misboundComponents.Count) {
+    $outdatedComponentNames = (@($outdatedComponents + $misboundComponents) | ForEach-Object { ($_ -split ':')[0] }) -join ','
+    $verdictHeadline += " | DRIVERS_OUTDATED($($outdatedComponents.Count + $misboundComponents.Count)): $outdatedComponentNames"
+}
+
+# Broken component details (already in the verdict word above via the count,
+# but the names help identify which specific devices are failing).
+$brokenComponentNames = (@($activeDeviceProblems) | ForEach-Object { ($_ -split ' ')[0] }) -join ','
+if ($brokenComponentNames) { $verdictHeadline += " | failing: $brokenComponentNames" }
 $verdictHeadline += " | fw:$(if ($currentFirmwareVersion) { $currentFirmwareVersion } else { 'n/a' })"
 $verdictHeadline += " | upg:$($operatingSystem.InstallDate.ToString('yyyy-MM-dd'))"
 $verdictHeadline += " | fsErr7d:$frameServerErrorCount"
