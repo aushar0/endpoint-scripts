@@ -38,7 +38,7 @@
 
     $measureServerEnabled: vendor default is ON (every Orb >=1.5 listens on
     TCP 7443 for inbound speed/responsiveness tests). This package DEFAULTS
-    TO DISABLED (fleet security posture) via service Environment
+    TO DISABLED (deployment security posture) via service Environment
     ORB_MEASURE_SERVER_ENABLED=0; set $true for vendor parity.
 
     No Show-InstallationWelcome: nothing to close (new install), silent-mode
@@ -89,7 +89,7 @@ Try {
     [bool]$createFirewallRule = $true
 
     ## Built-in measure server (inbound TCP 7443 listener): DISABLED by
-    ## default in this package (fleet posture); $true = vendor parity.
+    ## default in this package (deployment posture); $true = vendor parity.
     [bool]$measureServerEnabled = $false
 
     ## Payload pin - SHA-256 of orb-windows-amd64.exe.zip. Update on
