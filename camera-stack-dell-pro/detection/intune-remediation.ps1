@@ -277,10 +277,12 @@ Write-Output 'Package verified (Dell-signed).'
 # =============================================================================
 # PACKAGE EXTRACTION
 # =============================================================================
-# The Dell Update Package supports silent extraction via /s /e /f=<folder>.
-# The Dell extractor may or may not create a 16299 subfolder (7-Zip does,
-# Dell's own extractor may extract directly). Search recursively for INF
-# files regardless of the internal folder structure.
+# Extract the driver package. The Dell /s /e /f= switch was tested live and
+# produces ZERO files when run from a user context (exit code 1). 7-Zip
+# reliably extracts the package (241 files, 18 INFs, verified live). The Dell
+# switch is kept as a fallback because it may behave differently when Intune
+# Remediations runs as SYSTEM (elevated), which we cannot test from a user
+# context.
 
 $extractionFolder = Join-Path $workingFolder 'extract'
 
@@ -289,31 +291,63 @@ $cachedInfFiles = @(Get-ChildItem $extractionFolder -Recurse -Filter *.inf -Erro
 
 if ($cachedInfFiles.Count -eq 0) {
     New-Item -ItemType Directory -Force -Path $extractionFolder | Out-Null
-    Write-Output 'Extracting driver package (silent extraction)...'
-    $extractionProcess = Start-Process -FilePath $packageFilePath `
-        -ArgumentList "/s /e /f=`"$extractionFolder`"" `
-        -Wait -PassThru -WindowStyle Hidden
-    Write-Output "Extraction exit code: $($extractionProcess.ExitCode)"
-    # List what the extractor actually created (for troubleshooting)
-    $extractedContents = @(Get-ChildItem $extractionFolder -Recurse -ErrorAction SilentlyContinue)
-    Write-Output "Extraction produced $($extractedContents.Count) files."
+    $extractionSucceeded = $false
+
+    # --- Method 1: 7-Zip (verified to work; available on most fleet machines) ---
+    $sevenZipPath = @(
+        'C:\Program Files\7-Zip\7z.exe',
+        'C:\Program Files (x86)\7-Zip\7z.exe'
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+    if ($sevenZipPath) {
+        Write-Output "Extracting via 7-Zip ($sevenZipPath)..."
+        $extractResult = & $sevenZipPath x -y -o"$extractionFolder" $packageFilePath 2>&1
+        $extractExit = $LASTEXITCODE
+        $extractedInfs = @(Get-ChildItem $extractionFolder -Recurse -Filter *.inf -ErrorAction SilentlyContinue)
+        if ($extractExit -eq 0 -and $extractedInfs.Count -gt 0) {
+            $extractionSucceeded = $true
+            Write-Output "Extraction complete (7-Zip): $($extractedInfs.Count) INF files."
+        } else {
+            Write-Output "7-Zip extraction failed (exit $extractExit, $($extractedInfs.Count) INFs found)."
+        }
+    }
+
+    # --- Method 2: Dell silent extraction (may work as SYSTEM; failed as user) ---
+    if (-not $extractionSucceeded) {
+        Write-Output 'Trying Dell silent extraction (/s /e /f=)...'
+        $extractionProcess = Start-Process -FilePath $packageFilePath `
+            -ArgumentList "/s /e /f=`"$extractionFolder`"" `
+            -Wait -PassThru -WindowStyle Hidden
+        $extractedInfs = @(Get-ChildItem $extractionFolder -Recurse -Filter *.inf -ErrorAction SilentlyContinue)
+        if ($extractionProcess.ExitCode -eq 0 -and $extractedInfs.Count -gt 0) {
+            $extractionSucceeded = $true
+            Write-Output "Extraction complete (Dell): $($extractedInfs.Count) INF files."
+        } else {
+            Write-Output "Dell extraction failed (exit $($extractionProcess.ExitCode), $($extractedInfs.Count) INFs found)."
+        }
+    }
+
+    if (-not $extractionSucceeded) {
+        Write-Output 'All extraction methods failed.'
+        $topLevel = @(Get-ChildItem $extractionFolder -ErrorAction SilentlyContinue)
+        if ($topLevel.Count -gt 0) {
+            Write-Output 'Extraction folder contents:'
+            $topLevel | Select-Object -First 10 | ForEach-Object { Write-Output "  $($_.Name)" }
+        } else {
+            Write-Output 'Extraction folder is empty.'
+        }
+        exit 1
+    }
 }
 
-# Search recursively for INF files — works regardless of folder structure
+# Search recursively for INF files (works regardless of internal folder structure)
 $driverInfFiles = @(Get-ChildItem $extractionFolder -Recurse -Filter *.inf -ErrorAction SilentlyContinue)
 if ($driverInfFiles.Count -eq 0) {
-    Write-Output 'No INF files found after extraction. The package may have extracted to an unexpected location.'
-    # List top-level contents to help diagnose
-    $topLevel = @(Get-ChildItem $extractionFolder -ErrorAction SilentlyContinue)
-    if ($topLevel.Count -gt 0) {
-        Write-Output 'Extraction folder contents:'
-        $topLevel | Select-Object -First 10 | ForEach-Object { Write-Output "  $($_.Name)" }
-    } else {
-        Write-Output 'Extraction folder is empty.'
-    }
+    Write-Output 'No INF files found after extraction.'
     exit 1
 }
 Write-Output "Driver payload ready: $($driverInfFiles.Count) INF files."
+
 
 # =============================================================================
 # CAMERA IDLE WAIT
