@@ -95,6 +95,8 @@ views + the Sysnative leg under WOW64.
 - `Files\Download\Orb-installer.exe` - download lane target + re-run cache (exists-check:
   a cached copy is gate-verified and reused, not re-downloaded)
 - `Files\Fallback\Orb-installer.exe` - pre-staged pin-guarded fallback
+  Self-seeds from a trusted download when EMPTY; delete it to force
+  a refresh on the next install.
   (legacy bare `Files\Orb-installer.exe` also accepted)
 
 ## Payload sourcing
