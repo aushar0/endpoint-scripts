@@ -197,7 +197,22 @@ if (-not (Test-Path $packageFilePath)) {
     }
     Write-Output "Downloading $($selectedPackage.PackageFileName) via BITS..."
     try {
-        Start-BitsTransfer -Source $selectedPackage.DownloadUrl -Destination $packageFilePath -ErrorAction Stop
+        # Download via HttpClient (streamed, no BITS service dependency).
+        # BITS requires the Windows BITS service to be running, which may be
+        # disabled on locked-down machines. HttpClient works in any context.
+        $httpClient = [System.Net.Http.HttpClient]::new()
+        $httpClient.Timeout = [TimeSpan]::FromMinutes(10)
+        $httpResponse = $httpClient.GetAsync($selectedPackage.DownloadUrl, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        $httpResponse.EnsureSuccessStatusCode()
+        $downloadStream = $httpResponse.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+        $fileStream = [System.IO.File]::Create($packageFilePath)
+        $buffer = New-Object byte[] 81920
+        while (($bytesRead = $downloadStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $fileStream.Write($buffer, 0, $bytesRead)
+        }
+        $fileStream.Close()
+        $downloadStream.Close()
+        $httpClient.Dispose()
     } catch {
         Write-Output "Download failed: $($_.Exception.Message). The next scheduled run will retry."
         exit 1
