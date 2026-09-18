@@ -73,6 +73,13 @@ binary — existence-only on rollout 1.
   wrapper failures 60001-60014 (60012 = the desktop-app flavor is
   installed).
 
+## Payload folders (Lenovo pattern)
+
+- `Files\Download\orb-windows-amd64.exe.zip` - download lane target + re-run cache (exists-check:
+  a cached copy is gate-verified and reused, not re-downloaded)
+- `Files\Fallback\orb-windows-amd64.exe.zip` - pre-staged pin-guarded fallback
+  (legacy bare `Files\orb-windows-amd64.exe.zip` also accepted)
+
 ## Payload sourcing
 
 | Artifact | URL | SHA-256 (pinned in wrapper) |

@@ -90,6 +90,13 @@ views + the Sysnative leg under WOW64.
   Center). Return codes 0/3010/1641/1618 standard; wrapper failures
   60001-60015.
 
+## Payload folders (Lenovo pattern)
+
+- `Files\Download\Orb-installer.exe` - download lane target + re-run cache (exists-check:
+  a cached copy is gate-verified and reused, not re-downloaded)
+- `Files\Fallback\Orb-installer.exe` - pre-staged pin-guarded fallback
+  (legacy bare `Files\Orb-installer.exe` also accepted)
+
 ## Payload sourcing
 
 | Artifact | URL | SHA-256 (pinned in wrapper) |
