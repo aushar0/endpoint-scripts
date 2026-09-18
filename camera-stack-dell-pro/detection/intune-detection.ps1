@@ -400,29 +400,24 @@ if ($activeDeviceProblems.Count -gt 0) {
 }
 
 # =============================================================================
-# OUTPUT
+# OUTPUT — one dense line, everything combined
 # =============================================================================
-# Intune's detection-output column shows the LAST line of multi-line output,
-# so the verdict goes LAST (verified from live fleet results 2026-09-18).
-# Context and causes go first; verdict is the final, always-visible line.
+# Intune's detection-output column may truncate multi-line output, so all
+// data goes on a single line: verdict first, then causes, then context.
+// ~200-300 characters depending on findings; well under the 4 KB limit.
 
-# --- Context line (always printed) ---
-$contextSegments = @()
-if ($outdatedComponents.Count) { $contextSegments += "drv:$($outdatedComponents.Count)_old" }
-elseif ($misboundComponents.Count) { $contextSegments += 'drv:misbound' }
-else { $contextSegments += 'drv:current' }
-$contextSegments += "dep:$(if ($dependencyLines) { $dependencyLines -join ',' } else { 'n/a' })"
-if ($firstFrameServerError) {
-    $contextSegments += "err:$($firstFrameServerError.TimeCreated.ToString('MM-dd'))(+${hoursBetweenUpgradeAndFirstError}h)"
-}
-$contextSegments += "fw:$(if ($currentFirmwareVersion) { $currentFirmwareVersion } else { 'n/a' })"
-$contextSegments += "bld:$($operatingSystem.BuildNumber)|upg:$($operatingSystem.InstallDate.ToString('yyyy-MM-dd'))"
-Write-Output ($contextSegments -join '|')
+$segments = @()
 
-# --- Causes line (broken machines only) ---
+# Verdict + failing components
 if ($activeDeviceProblems.Count) {
-    $causeSegments = @()
+    $shortNames = ($activeDeviceProblems | ForEach-Object {
+        ($_ -split ' code ')[0] -replace '-PB-ARL','' -replace '-PB-LNL','' -replace '-PB',''
+    } | Select-Object -Unique) -join ','
+    $segments += "CAMERA_BROKEN($($activeDeviceProblems.Count)):$shortNames"
+
+    # Per-component causes with readable meanings
     $seenComponents = @{}
+    $causes = @()
     foreach ($finding in $activeDeviceProblems) {
         $componentName = ($finding -split ' code ')[0]
         if ($seenComponents[$componentName]) { continue }
@@ -430,29 +425,41 @@ if ($activeDeviceProblems.Count) {
         $problemCode = ($finding -split ' code ')[-1]
         $meaning = if ($problemCodeMeanings[[int]$problemCode]) { ($problemCodeMeanings[[int]$problemCode] -replace ' ','_') } else { 'unknown' }
         $shortName = $componentName -replace '-PB-ARL','' -replace '-PB-LNL','' -replace '-PB',''
-        $causeSegments += "$shortName=$problemCode($meaning)"
+        $causes += "$shortName=$problemCode($meaning)"
     }
-    # Attach NTSTATUS codes from setupapi when present (the deeper "why")
+    # NTSTATUS from setupapi (the deeper "why")
     $allSetupapiHits = @($setupapiFindings) + @($setupapiAppFindings)
     $ntStatusCodes = @($allSetupapiHits | ForEach-Object {
         if ($_.Line -match '(0x[0-9a-fA-F]{8})') { $Matches[1] }
     } | Select-Object -Unique | Select-Object -First 2)
-    if ($ntStatusCodes) { $causeSegments += "ntstatus:$($ntStatusCodes -join ',')" }
-    Write-Output ($causeSegments -join ' ')
+    if ($ntStatusCodes) { $causes += "ntstatus:$($ntStatusCodes -join ',')" }
+    $segments += ($causes -join ' ')
+} elseif ($deliberatelyDisabled.Count) {
+    $segments += 'CAMERA_DISABLED'
+} else {
+    $segments += 'CAMERA_OK'
 }
 
-# --- Verdict line (always printed, always LAST — this is what Intune shows) ---
-$verdictLine = if ($activeDeviceProblems.Count) {
-    $shortNames = ($activeDeviceProblems | ForEach-Object {
-        ($_ -split ' code ')[0] -replace '-PB-ARL','' -replace '-PB-LNL','' -replace '-PB',''
-    } | Select-Object -Unique) -join ','
-    "CAMERA_BROKEN($($activeDeviceProblems.Count)):$shortNames"
-} elseif ($deliberatelyDisabled.Count) {
-    'CAMERA_DISABLED'
-} else {
-    'CAMERA_OK'
+# Driver currency
+if ($outdatedComponents.Count) { $segments += "drv:$($outdatedComponents.Count)_old" }
+elseif ($misboundComponents.Count) { $segments += 'drv:misbound' }
+else { $segments += 'drv:current' }
+
+# Dependencies
+$segments += "dep:$(if ($dependencyLines) { $dependencyLines -join ',' } else { 'n/a' })"
+
+# Firmware
+$segments += "fw:$(if ($currentFirmwareVersion) { $currentFirmwareVersion } else { 'n/a' })"
+
+# OS build + upgrade date
+$segments += "bld:$($operatingSystem.BuildNumber)|upg:$($operatingSystem.InstallDate.ToString('yyyy-MM-dd'))"
+
+# First Frame Server error (when present, with hours-after-upgrade delta)
+if ($firstFrameServerError) {
+    $segments += "err:$($firstFrameServerError.TimeCreated.ToString('MM-dd'))(+${hoursBetweenUpgradeAndFirstError}h)"
 }
-Write-Output $verdictLine
+
+Write-Output ($segments -join '|')
 
 # =============================================================================
 # EXIT CODE
