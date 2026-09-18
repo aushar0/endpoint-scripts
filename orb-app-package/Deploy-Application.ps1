@@ -40,6 +40,7 @@
 .PARAMETER DeployMode
     Interactive = Shows dialogs, Silent = No dialogs, NonInteractive = very silent.
 #>
+
 [CmdletBinding()]
 Param (
     [Parameter(Mandatory = $false)]
@@ -62,6 +63,7 @@ Param (
 ##*===============================================
 Try {
     ## Variables: Application
+
     [string]$appVendor        = 'Orb Forge Inc.'
     [string]$appName          = 'Orb'
     [string]$appVersion       = '1.5.5'      # constant - Orb.exe has no FileVersion; bump on payload swap
@@ -74,33 +76,40 @@ Try {
 
     ## Orb Cloud linking token. EMPTY in every repo copy (credential
     ## treatment: set at deploy). Format from vendor docs: orb-dt1-...
+
     [string]$deployToken = ''
 
     ## Desktop shortcut stance: $true removes the Public Desktop shortcut
     ## post-install (Start Menu shortcut always stays).
+
     [bool]$suppressDesktopShortcut = $false
 
     ## Payload pin - SHA-256 of Orb-installer.exe. Guards the STAGED
     ## fallback copy; update on version swap; '' skips verification.
     ## The download lane is Authenticode-gated instead (URL rotates).
+
     [string]$expectedSha256 = '6AC4670B43CAB2AA7D3513E0FDACA599F1AA094EB037E76A579F97F733BE9709'
 
     ## Payload acquisition stance: 'download-first' (default - curl.exe at
     ## deploy time, staged copy as pinned fallback), 'local-first',
     ## 'local-only'.
+
     [string]$downloadStance = 'download-first'
     [string]$orbDownloadUrl = 'https://pkgs.orb.net/earlyaccess/windows/Orb-installer.exe'
 
     ## Vendor-documented silent switches. App flavor only (sensor service is
     ## a different product on the same path - do not mix).
+
     [string]$orbInstallParams = '/S /LAUNCH_AT_STARTUP=1 /START_IN_BACKGROUND=1'
     If ($deployToken) { $orbInstallParams = "$orbInstallParams /ORB_DEPLOYMENT_TOKEN=$deployToken" }
 
     ## Variables: Script
+
     [int32]$mainExitCode    = 0
     [string]$scriptDirectory = Split-Path -Path $MyInvocation.MyCommand.Definition -Parent
 
     ## Dot-source the App Deploy Toolkit
+
     Try {
         $modulePath = Join-Path -Path $scriptDirectory -ChildPath 'AppDeployToolkit\AppDeployToolkitMain.ps1'
         If (-not (Test-Path -LiteralPath $modulePath -PathType 'Leaf')) { Throw "Module file does not exist [$modulePath]." }
@@ -129,6 +138,7 @@ Try {
     ## Lenovo pattern: Files\Download\ = download lane target + re-run cache
     ## (exists-check first, no re-download); Files\Fallback\ = pre-staged
     ## pin-guarded copy. Legacy bare Files\Orb-installer.exe still accepted.
+
     [string]$script:dirDownload = Join-Path -Path $script:dirFiles -ChildPath 'Download'
     [string]$script:dirFallback = Join-Path -Path $script:dirFiles -ChildPath 'Fallback'
     [string]$script:dlTarget    = Join-Path -Path $script:dirDownload -ChildPath 'Orb-installer.exe'
@@ -136,6 +146,7 @@ Try {
     [string]$script:orbInstaller = Join-Path -Path $script:dirFiles -ChildPath 'Orb-installer.exe'
 
     ## Ground truth: installed binary + ARP entry (version lives ONLY there).
+
     [string]$script:orbInstalledExe = Join-Path -Path $env:ProgramFiles -ChildPath 'Orb\Orb.exe'
     [string]$script:orbUninstallExe = Join-Path -Path $env:ProgramFiles -ChildPath 'Orb\uninstall.exe'
 
@@ -163,6 +174,7 @@ Try {
 
     function Test-SensorFlavorPresent {
         ## Sensor flavor = service 'Orb' (the desktop app installs no service).
+
         If (Get-Service -Name 'Orb' -ErrorAction SilentlyContinue) { return $true }
         return $false
     }
@@ -170,6 +182,7 @@ Try {
     function Test-OrbInstallerSig ([string]$Path) {
         ## Authenticode gate: the vendor URL rotates, so the download lane
         ## trusts the SIGNER, not a hash.
+
         $sig = Get-AuthenticodeSignature -FilePath $Path
         If ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notlike '*Orb Forge*') {
             Throw "payload failed the Authenticode gate (status=$($sig.Status) signer=[$($sig.SignerCertificate.Subject)]) [$Path]"
@@ -191,6 +204,7 @@ Try {
         ## Acceptance for the STAGED fallback = pin match OR a valid Orb
         ## Forge signature (a signature-gated fresh download is legitimate
         ## fallback content - the vendor URL rotates by design).
+
         If ($expectedSha256 -and (Get-FileHash -LiteralPath $Path -Algorithm 'SHA256').Hash -eq $expectedSha256.ToUpper()) { return $true }
         $sig = Get-AuthenticodeSignature -FilePath $Path
         return ($sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -like '*Orb Forge*')
@@ -200,6 +214,7 @@ Try {
         ## Empty-Fallback self-fill: seed Files\Fallback from a TRUSTED
         ## download so the package content completes itself. Never
         ## overwrites an existing fallback - delete it to force a refresh.
+
         If (-not (Test-Path -LiteralPath $script:fbTarget)) {
             New-Item -Path $script:dirFallback -ItemType Directory -Force | Out-Null
             Copy-Item -LiteralPath $Source -Destination $script:fbTarget -Force
@@ -209,6 +224,7 @@ Try {
 
     function Get-OrbPayload {
         ## Resolves [$script:orbInstaller] to a TRUSTED payload path.
+
         $staged = @($script:fbTarget, $script:orbInstaller) | Where-Object { Test-Path -LiteralPath $_ -PathType 'Leaf' }
         $stagedOk = $null
         Foreach ($s in $staged) {
@@ -220,6 +236,7 @@ Try {
             Try {
                 If (Test-Path -LiteralPath $script:dlTarget) {
                     ## Re-run cache: exists-check - gate and reuse.
+
                     Test-OrbInstallerSig $script:dlTarget
                     Write-Log -Message "ORB_PAYLOAD source=download-cache [$($script:dlTarget)] (signature gate passed)."
                     Add-OrbFallbackSeed $script:dlTarget
@@ -260,6 +277,7 @@ Try {
     }
 
     ## Post-mortem digest: one greppable line per phase for humans and AI.
+
     function Write-OrbSummary ([string]$Result) {
         Write-Log -Message ("ORB_SUMMARY deploymenttype={0} mode={1} phase={2} user={3} computer={4} version={5} exepresent={6} arp={7} mdm={8} token_in_package={9} result={10}" -f `
             $DeploymentType, $DeployMode, $script:installPhase, $env:USERNAME, $env:COMPUTERNAME, $appVersion,
@@ -282,6 +300,7 @@ Catch {
 ## > Perform pre-installation tasks here >
 
 ## Collision guard: the sensor flavor shares C:\Program Files\Orb\Orb.exe.
+
 If (Test-SensorFlavorPresent) {
     [int32]$mainExitCode = 60012
     Write-OrbSummary "failed-$mainExitCode"
@@ -299,6 +318,7 @@ Try {
 
     ## Payload: download lane (curl.exe, Authenticode-gated) with the staged
     ## pin-guarded fallback. No Show-InstallationWelcome: nothing to close.
+
     Get-OrbPayload
 
     Write-Log -Message "Starting installation of [$appVendor $appName $appVersion] via [$script:orbInstaller] with params [$orbInstallParams]..."
@@ -319,6 +339,7 @@ Try {
     ## > Perform post-installation tasks here >
 
     ## Ground truth: binary AND ARP entry must exist (NSIS exit-0 lie guard).
+
     If (-not (Test-Path -LiteralPath $script:orbInstalledExe)) {
         [int32]$mainExitCode = 60008
         Write-OrbSummary "failed-$mainExitCode"
@@ -356,6 +377,7 @@ Catch {
 ## > Perform pre-repair tasks here >
 
 ## Collision guard: never repair across flavors.
+
 If (Test-SensorFlavorPresent) {
     [int32]$mainExitCode = 60012
     Write-OrbSummary "failed-$mainExitCode"
@@ -423,6 +445,7 @@ Try {
     ## > Perform uninstallation tasks here >
 
     ## Idempotent uninstall: nothing on disk, nothing to remove.
+
     If (-not (Test-Path -LiteralPath $script:orbInstalledExe)) {
         Write-Log -Message 'Orb: installed binary absent - uninstall is a no-op (already clean).'
         Write-OrbSummary 'success-noop'
@@ -438,6 +461,7 @@ Try {
     ## A RUNNING Orb holds Orb.exe open: the NSIS uninstaller then exits 0
     ## while silently leaving the binary (lab-proven). Kill first - kill
     ## != removal, this is access-for-the-uninstaller.
+
     Get-Process -Name 'Orb' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
 
@@ -459,6 +483,7 @@ Try {
     ## > Perform post-uninstallation tasks here >
 
     ## Grace-poll the async NSIS uninstaller, then fail loud on leftovers.
+
     [int32]$graceSeconds = 0
     While ((Test-Path -LiteralPath $script:orbInstalledExe) -and $graceSeconds -lt 60) {
         Start-Sleep -Seconds 5
@@ -473,6 +498,7 @@ Try {
     Write-Log -Message "Orb: Orb.exe confirmed removed (grace wait ${graceSeconds}s)."
 
     ## Residue census (log-only; lab result = vendor uninstall is zero-residue).
+
     $installDir = Join-Path -Path $env:ProgramFiles -ChildPath 'Orb'
     Write-Log -Message ("ORB_RESIDUE installdir={0} arp={1} mdm={2}" -f `
         $(If (Test-Path -LiteralPath $installDir) { 'present' } else { 'absent' }), (Get-OrbArpEntry), (Get-OrbMdmState))

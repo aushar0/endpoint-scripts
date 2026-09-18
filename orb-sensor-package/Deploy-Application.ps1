@@ -54,6 +54,7 @@
 .PARAMETER DeployMode
     Interactive = Shows dialogs, Silent = No dialogs, NonInteractive = very silent.
 #>
+
 [CmdletBinding()]
 Param (
     [Parameter(Mandatory = $false)]
@@ -76,6 +77,7 @@ Param (
 ##*===============================================
 Try {
     ## Variables: Application
+
     [string]$appVendor        = 'Orb Forge Inc.'
     [string]$appName          = 'Orb Sensor'
     [string]$appVersion       = '1.5.5'      # constant - binary has no FileVersion; bump on payload swap
@@ -89,32 +91,39 @@ Try {
     ## Orb Cloud linking token. EMPTY in every repo copy (credential
     ## treatment: set at deploy). Reaches the service as registry
     ## Environment ORB_DEPLOYMENT_TOKEN.
+
     [string]$deployToken = ''
 
     ## Inbound firewall rule for the exe (vendor-parity; the measure server
     ## and being a test target need it).
+
     [bool]$createFirewallRule = $true
 
     ## Built-in measure server (inbound TCP 7443 listener): DISABLED by
     ## default in this package (deployment posture); $true = vendor parity.
+
     [bool]$measureServerEnabled = $false
 
     ## Payload pin - SHA-256 of orb-windows-amd64.exe.zip. Gates BOTH lanes
     ## (the binary is unsigned, so the pin is the only trust anchor).
     ## Update on version swap; '' skips verification.
+
     [string]$zipSha256 = '3DF467CB5ADF8D9F6ABD75BA92E18FE63C9C88B94A38AB16D9ABF2E2676887CE'
 
     ## Payload acquisition stance: 'download-first' (default - curl.exe at
     ## deploy time, staged copy as pinned fallback), 'local-first',
     ## 'local-only'.
+
     [string]$downloadStance = 'download-first'
     [string]$orbDownloadUrl = 'https://pkgs.orb.net/stable/generic/latest/orb-windows-amd64.exe.zip'
 
     ## Variables: Script
+
     [int32]$mainExitCode    = 0
     [string]$scriptDirectory = Split-Path -Path $MyInvocation.MyCommand.Definition -Parent
 
     ## Dot-source the App Deploy Toolkit
+
     Try {
         $modulePath = Join-Path -Path $scriptDirectory -ChildPath 'AppDeployToolkit\AppDeployToolkitMain.ps1'
         If (-not (Test-Path -LiteralPath $modulePath -PathType 'Leaf')) { Throw "Module file does not exist [$modulePath]." }
@@ -143,6 +152,7 @@ Try {
     ## Lenovo pattern: Files\Download\ = download lane target + re-run cache
     ## (exists-check first); Files\Fallback\ = pre-staged copy. Legacy bare
     ## Files\ placement still accepted.
+
     [string]$script:dirDownload = Join-Path -Path $script:dirFiles -ChildPath 'Download'
     [string]$script:dirFallback = Join-Path -Path $script:dirFiles -ChildPath 'Fallback'
     [string]$script:dlTarget    = Join-Path -Path $script:dirDownload -ChildPath 'orb-windows-amd64.exe.zip'
@@ -150,6 +160,7 @@ Try {
     [string]$script:orbZip      = Join-Path -Path $script:dirFiles -ChildPath 'orb-windows-amd64.exe.zip'
 
     ## Ground truth: service + binary.
+
     [string]$script:orbInstalledExe = Join-Path -Path $env:ProgramFiles -ChildPath 'Orb\Orb.exe'
     [string]$script:svcName = 'Orb'
 
@@ -164,6 +175,7 @@ Try {
 
     function Test-AppFlavorPresent {
         ## Desktop-app ARP entry (DisplayName exactly 'Orb') in either view.
+
         $views = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
                    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')
         Foreach ($v in $views) {
@@ -178,6 +190,7 @@ Try {
 
     function Test-OrbZipPin ([string]$Path) {
         ## The binary is unsigned - the pin IS the trust gate.
+
         If (-not $zipSha256) { return $true }
         return ((Get-FileHash -LiteralPath $Path -Algorithm 'SHA256').Hash -eq $zipSha256.ToUpper())
     }
@@ -185,6 +198,7 @@ Try {
     function Add-OrbFallbackSeed ([string]$Source) {
         ## Empty-Fallback self-fill from a PIN-TRUSTED source. Never
         ## overwrites an existing fallback - delete it to force a refresh.
+
         If (-not (Test-Path -LiteralPath $script:fbTarget)) {
             New-Item -Path $script:dirFallback -ItemType Directory -Force | Out-Null
             Copy-Item -LiteralPath $Source -Destination $script:fbTarget -Force
@@ -194,6 +208,7 @@ Try {
 
     function Get-OrbSensorZip {
         ## Resolves [$script:orbZip] to a PIN-TRUSTED payload path.
+
         $staged = @($script:fbTarget, $script:orbZip) | Where-Object { Test-Path -LiteralPath $_ -PathType 'Leaf' }
         $stagedOk = $null
         Foreach ($s in $staged) {
@@ -205,6 +220,7 @@ Try {
             Try {
                 If (Test-Path -LiteralPath $script:dlTarget) {
                     ## Re-run cache: exists-check - pin and reuse.
+
                     If (-not (Test-OrbZipPin $script:dlTarget)) { Throw 'cached download zip no longer matches the pin' }
                     Write-Log -Message "ORBSENSOR_PAYLOAD source=download-cache [$($script:dlTarget)] (matches pin)."
                     Add-OrbFallbackSeed $script:dlTarget
@@ -220,6 +236,7 @@ Try {
                 If (-not (Test-OrbZipPin $script:dlTarget)) {
                     ## Unsigned product: the pin IS the gate - never adopt
                     ## drifted bytes. Remove the bad cache, use staged.
+
                     $dlHash = (Get-FileHash -LiteralPath $script:dlTarget -Algorithm 'SHA256').Hash
                     Write-Log -Message "ORBSENSOR_PAYLOAD download hash DRIFT (got $($dlHash.Substring(0,12)).. vs pin $($zipSha256.Substring(0,12))..) - unsigned product, pin is the gate; NOT adopting."
                     Remove-Item -LiteralPath $script:dlTarget -Force -ErrorAction SilentlyContinue
@@ -257,6 +274,7 @@ Try {
 
     function Install-OrbSensorBits {
         ## Extract + stage the binary, create/configure/start the service.
+
         [string]$stage = Join-Path -Path $env:Temp -ChildPath ("OrbSensor_{0}" -f [Guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -Path $stage -ItemType Directory -Force | Out-Null
         Try {
@@ -268,6 +286,7 @@ Try {
             New-Item -Path (Join-Path -Path $env:ProgramFiles -ChildPath 'Orb') -ItemType Directory -Force | Out-Null
             ## A running Orb (either flavor) holds Orb.exe open - kill before
             ## copy or Copy-Item throws on the locked file (lab-proven).
+
             Get-Process -Name 'Orb' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 2
             Copy-Item -Path $srcExe.FullName -Destination $script:orbInstalledExe -Force
@@ -286,11 +305,13 @@ Try {
             Write-Log -Message 'Orb Sensor: service created.'
         }
         ## Vendor-parity failure recovery: restart x3 @60s, reset 86400.
+
         $null = & sc.exe failure $script:svcName reset= 86400 actions= restart/60000/restart/60000/restart/60000
         If ($LASTEXITCODE -ne 0) { Write-Log -Message "Orb Sensor: sc.exe failure returned $LASTEXITCODE (non-fatal)." }
 
         ## Service-scope environment (token + measure server) via registry
         ## multistring - the documented service-config method.
+
         $envValues = @()
         If ($deployToken) { $envValues += "ORB_DEPLOYMENT_TOKEN=$deployToken" }
         If (-not $measureServerEnabled) { $envValues += 'ORB_MEASURE_SERVER_ENABLED=0' }
@@ -312,6 +333,7 @@ Try {
     }
 
     ## Post-mortem digest: one greppable line per phase for humans and AI.
+
     function Write-OrbSummary ([string]$Result) {
         Write-Log -Message ("ORBSVC_SUMMARY deploymenttype={0} mode={1} phase={2} user={3} computer={4} version={5} exepresent={6} service={7} firewall={8} measure_server={9} token_in_package={10} result={11}" -f `
             $DeploymentType, $DeployMode, $script:installPhase, $env:USERNAME, $env:COMPUTERNAME, $appVersion,
@@ -336,6 +358,7 @@ Catch {
 ## > Perform pre-installation tasks here >
 
 ## Collision guard: the app flavor shares C:\Program Files\Orb\Orb.exe.
+
 If (Test-AppFlavorPresent) {
     [int32]$mainExitCode = 60012
     Write-OrbSummary "failed-$mainExitCode"
@@ -353,6 +376,7 @@ Try {
 
     ## Payload: download lane (curl.exe, pin-gated) with the staged pinned
     ## fallback, then native service install. No Show-InstallationWelcome.
+
     Get-OrbSensorZip
 
     Write-Log -Message "Starting installation of [$appVendor $appName $appVersion]..."
@@ -373,6 +397,7 @@ Try {
     ## > Perform post-installation tasks here >
 
     ## Ground truth: binary AND service Running (exit-0-lie guard).
+
     If (-not (Test-Path -LiteralPath $script:orbInstalledExe)) {
         [int32]$mainExitCode = 60008
         Write-OrbSummary "failed-$mainExitCode"
@@ -407,6 +432,7 @@ Catch {
 ## > Perform pre-repair tasks here >
 
 ## Collision guard: never repair across flavors.
+
 If (Test-AppFlavorPresent) {
     [int32]$mainExitCode = 60012
     Write-OrbSummary "failed-$mainExitCode"
@@ -477,6 +503,7 @@ Try {
     ## > Perform uninstallation tasks here >
 
     ## Idempotent uninstall: nothing on disk, nothing in SCM.
+
     If (-not (Test-Path -LiteralPath $script:orbInstalledExe) -and
         -not (Get-Service -Name $script:svcName -ErrorAction SilentlyContinue)) {
         Write-Log -Message 'Orb Sensor: binary and service absent - uninstall is a no-op (already clean).'
@@ -486,6 +513,7 @@ Try {
 
     ## Native teardown - install.ps1 -Uninstall is unusable unattended
     ## (Read-Host hang, lab-proven).
+
     Write-Log -Message "Starting uninstall of [$appName $appVersion]..."
 
     $svc = Get-Service -Name $script:svcName -ErrorAction SilentlyContinue
