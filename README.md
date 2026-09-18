@@ -14,6 +14,18 @@ deploy it, and the evidence behind its claims.
 
 ## Kits
 
+### [orb-app-package](orb-app-package/) + [orb-sensor-package](orb-sensor-package/)
+
+Two deployable PSADT 3.10.1 packages for the Orb network-experience
+platform (orb.net): the desktop app (NSIS installer, silent switches,
+ARP-anchored detection with a Sysnative fix for the 32-bit script host)
+and the headless sensor service (native service management because the
+vendor installer prompts interactively on uninstall). The flavors share
+one install path, so each package refuses to install on top of the other
+(guard proven in both directions). Process-kill-before-uninstall counters
+the NSIS exit-0-with-locked-files lie; every payload is hash-pinned to
+the vendor URL.
+
 ### [psadt-v4-migration](psadt-v4-migration/)
 
 Move PSAppDeployToolkit v3.10.x packages to the current 4.1.8 engine without
