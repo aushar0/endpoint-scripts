@@ -126,8 +126,8 @@ param(
 
 function Show-RestartToast {
     # Shows a toast with optional icon and banner.
-    # Icon priority: -ToastIcon path → cached download → generated camera icon.
-    # Banner priority: -ToastBanner path → generated gradient banner.
+    # Icon priority: -ToastIcon path -> cached download -> generated camera icon.
+    # Banner priority: -ToastBanner path -> generated gradient banner.
     # Images cached in C:\ProgramData\DellCamera\toast\ after first run.
     # Source label shows "Windows PowerShell" (AUMID limitation, accepted).
 
@@ -187,7 +187,7 @@ function Show-RestartToast {
                 $resolvedIconPath = $cachedIconPath
                 Write-Output 'Toast icon: generated camera fallback.'
             } catch {
-                Write-Output "Icon generation failed: $($_.Exception.Message) — toast without icon."
+                Write-Output "Icon generation failed: $($_.Exception.Message) - toast without icon."
             }
         }
     }
@@ -219,16 +219,26 @@ function Show-RestartToast {
             $resolvedBannerPath = $cachedBannerPath
             Write-Output 'Toast banner: generated and cached.'
         } catch {
-            Write-Output "Banner generation failed: $($_.Exception.Message) — toast without banner."
+            Write-Output "Banner generation failed: $($_.Exception.Message) - toast without banner."
         }
     }
 
     # --- Build and show the toast ---
-    $iconXml   = if ($resolvedIconPath) {
-        "            <image src=`"file:///$($resolvedIconPath -replace '\\', '/')`" placement=`"appLogoOverride`" hint-crop=`"circle`"/>"
+    $iconUri = $null
+    $bannerUri = $null
+    if ($resolvedIconPath) {
+        $iconUri = 'file:///' + ($resolvedIconPath -replace '\\', '/')
     }
-    $bannerXml = if ($resolvedBannerPath) {
-        "            <image src=`"file:///$($resolvedBannerPath -replace '\\', '/')`" placement=`"hero`"/>"
+    if ($resolvedBannerPath) {
+        $bannerUri = 'file:///' + ($resolvedBannerPath -replace '\\', '/')
+    }
+    $iconXml = ''
+    if ($iconUri) {
+        $iconXml = "            <image src=`"$iconUri`" placement=`"appLogoOverride`" hint-crop=`"circle`"/>"
+    }
+    $bannerXml = ''
+    if ($bannerUri) {
+        $bannerXml = "            <image src=`"$bannerUri`" placement=`"hero`"/>"
     }
 
     $appAumid = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
