@@ -416,6 +416,17 @@ $detailOutputLines | ForEach-Object { Write-Output $_ }
 $needsRemediation = ($outdatedComponents.Count -gt 0) -or ($misboundComponents.Count -gt 0)
 
 if ($needsRemediation) {
+    # Print the specific findings so the Intune detection-output column shows
+    # exactly what is wrong, not just the exit code.
+    Write-Output ''
+    Write-Output "REMEDIATION REQUIRED - $($outdatedComponents.Count + $misboundComponents.Count) finding(s):"
+    ($outdatedComponents + $misboundComponents) | ForEach-Object { Write-Output "  $_" }
+    if ($activeDeviceProblems) {
+        Write-Output "Also broken now: $($activeDeviceProblems -join '; ')"
+    }
+    if ($deliberatelyDisabled) {
+        Write-Output "Disabled by choice (not a fault): $($deliberatelyDisabled -join '; ')"
+    }
     exit 1
 }
 
