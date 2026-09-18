@@ -17,7 +17,10 @@ true-positive x3, true-negative x4). v1.1.x (2026-09-18): two-lane
 installer acquire in the Lenovo-style folder layout (`Files\Download\`
 runtime fetch + `Files\Fallback\` staged copy) — download-lane live probe
 plus a 6-check acquire harness, all green (no install executed in that
-pass; see [Test ledger](#test-ledger)). Not lab-testable: tenant
+pass; see [Test ledger](#test-ledger)). v1.2.0: readability pass — the
+wrapper follows the stock 3.10.1 template layout (phase banners,
+`## <Perform X tasks here>` markers, helpers in one section); zero
+behavior change, harness re-run 6/6. Not lab-testable: tenant
 authentication, licensing, and session behavior.
 
 ## Contents
