@@ -96,6 +96,12 @@ Try {
     ## version swap; '' skips verification.
     [string]$zipSha256 = '3DF467CB5ADF8D9F6ABD75BA92E18FE63C9C88B94A38AB16D9ABF2E2676887CE'
 
+    ## Payload acquisition stance: 'download-first' (default - curl.exe at
+    ## deploy time, staged copy as pinned fallback), 'local-first',
+    ## 'local-only'. The pin gates BOTH lanes (binary is unsigned).
+    [string]$downloadStance = 'download-first'
+    [string]$orbDownloadUrl = 'https://pkgs.orb.net/stable/generic/latest/orb-windows-amd64.exe.zip'
+
     ## Variables: Script
     [int32]$mainExitCode    = 0
     [string]$scriptDirectory = Split-Path -Path $MyInvocation.MyCommand.Definition -Parent
@@ -123,9 +129,82 @@ Try {
     ##* PAYLOAD PIN + GROUND-TRUTH ANCHORS (runtime)
     ##*===============================================
     [string]$script:orbZip = Join-Path -Path $script:dirFiles -ChildPath 'orb-windows-amd64.exe.zip'
-    If (-not (Test-Path -LiteralPath $script:orbZip -PathType 'Leaf')) {
-        Throw "orb-windows-amd64.exe.zip not found in [$script:dirFiles]."
+
+    ## Payload acquisition (Lenovo pattern): 'download-first' (default)
+    ## fetches the vendor zip at deploy time via curl.exe; the staged
+    ## Files\ copy is the SHA-256-pinned fallback. The sensor binary is
+    ## UNSIGNED (no Authenticode gate possible), so the download lane is
+    ## gated by the hash pin itself: drift = refuse the fresh bytes and
+    ## fall back to the staged copy; no staged copy = fail 60005-closed.
+    [string]$downloadStance = 'download-first'
+    [string]$orbDownloadUrl = 'https://pkgs.orb.net/stable/generic/latest/orb-windows-amd64.exe.zip'
+
+    function Get-OrbSensorZip {
+        ## Ensures [$script:orbZip] exists AND matches the pin (when set).
+        $haveLocal = Test-Path -LiteralPath $script:orbZip -PathType 'Leaf'
+        $localOk = $false
+        If ($haveLocal -and $zipSha256) {
+            $localOk = ((Get-FileHash -LiteralPath $script:orbZip -Algorithm 'SHA256').Hash -eq $zipSha256.ToUpper())
+        }
+        ElseIf ($haveLocal) { $localOk = $true }
+
+        If ($downloadStance -in @('download-first', 'download-only')) {
+            $curl = Join-Path -Path $env:SystemRoot -ChildPath 'System32\curl.exe'
+            $tmp = "$script:orbZip.download"
+            Try {
+                If (-not (Test-Path -LiteralPath $curl)) { Throw "curl.exe not found at [$curl] (inbox on Windows 10 1803+)" }
+                Write-Log -Message "Orb Sensor: download lane - fetching [$orbDownloadUrl] via curl.exe..."
+                $null = & $curl -sSL --fail --retry 2 --connect-timeout 20 --max-time 300 -o $tmp $orbDownloadUrl
+                If ($LASTEXITCODE -ne 0) { Throw "curl.exe exit $LASTEXITCODE" }
+                If ((Get-Item -Path $tmp).Length -eq 0) { Throw 'downloaded payload is ZERO bytes' }
+                If ($zipSha256) {
+                    $dlHash = (Get-FileHash -Path $tmp -Algorithm 'SHA256').Hash
+                    If ($dlHash -ne $zipSha256.ToUpper()) {
+                        ## Unsigned product: the pin IS the gate - never adopt
+                        ## drifted bytes. Fall back to the staged copy.
+                        Write-Log -Message "ORBSENSOR_PAYLOAD download hash DRIFT (got $($dlHash.Substring(0,12)).. vs pin $($zipSha256.Substring(0,12))..) - unsigned product, pin is the gate; NOT adopting."
+                        Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+                        If ($localOk) {
+                            Write-Log -Message 'ORBSENSOR_PAYLOAD source=staged-fallback (download drifted, staged copy matches pin).'
+                            Return
+                        }
+                        Throw "download drifted from the pin and no staged fallback exists - refusing unverified bytes (re-pin after a known-good download, or stage the zip)."
+                    }
+                }
+                Move-Item -Path $tmp -Destination $script:orbZip -Force
+                Write-Log -Message 'ORBSENSOR_PAYLOAD source=download (hash matches pin).'
+                Return
+            }
+            Catch {
+                Write-Log -Message "ORBSENSOR_PAYLOAD download FAILED: $($_.Exception.Message)"
+                Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+                If ($downloadStance -eq 'download-only') {
+                    Throw "download-only stance: download failed - $($_.Exception.Message)"
+                }
+            }
+        }
+
+        If ($localOk) {
+            Write-Log -Message 'ORBSENSOR_PAYLOAD source=staged-fallback ($dirFiles copy matches pin).'
+            Return
+        }
+        If ($haveLocal) {
+            Throw "orb-windows-amd64.exe.zip in [$script:dirFiles] does NOT match the SHA-256 pin and no trusted download was available - refusing to install unverified bytes."
+        }
+        Throw "orb-windows-amd64.exe.zip not found in [$script:dirFiles] and the download lane produced nothing trusted - stage the zip or fix client internet access (stance=[$downloadStance])."
     }
+    Switch ($downloadStance) {
+        'download-first' { Get-OrbSensorZip }
+        'download-only'  { Get-OrbSensorZip }
+        'local-first'    { Get-OrbSensorZip }
+        'local-only'     {
+            If (-not (Test-Path -LiteralPath $script:orbZip -PathType 'Leaf')) {
+                Throw "orb-windows-amd64.exe.zip not found in [$script:dirFiles] and stance=local-only - stage the payload."
+            }
+        }
+        Default { Throw "invalid `$downloadStance [$downloadStance] - use download-first / download-only / local-first / local-only" }
+    }
+
     If ((Get-Item -LiteralPath $script:orbZip).Length -eq 0) {
         Throw "orb-windows-amd64.exe.zip in [$script:dirFiles] is ZERO bytes - bad copy."
     }

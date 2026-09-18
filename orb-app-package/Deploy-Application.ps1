@@ -72,9 +72,18 @@ Try {
     ## post-install (Start Menu shortcut always stays).
     [bool]$suppressDesktopShortcut = $false
 
-    ## Payload pin - SHA-256 of Orb-installer.exe. Update on version swap;
-    ## '' skips verification.
+    ## Payload pin - SHA-256 of Orb-installer.exe. Guards the STAGED copy;
+    ## update on version swap; '' skips verification.
     [string]$expectedSha256 = '6AC4670B43CAB2AA7D3513E0FDACA599F1AA094EB037E76A579F97F733BE9709'
+
+    ## Payload acquisition (Lenovo pattern): 'download-first' (default)
+    ## fetches the installer at deploy time via curl.exe, gated by
+    ## Authenticode (signer must be Orb Forge - the vendor URL rotates, so
+    ## a hash cannot pre-pin the download); the staged Files\ copy is the
+    ## SHA-256-pinned fallback. 'local-first' prefers the staged copy;
+    ## 'local-only' never touches the network. No lane = fail 60005.
+    [string]$downloadStance = 'download-first'
+    [string]$orbDownloadUrl = 'https://pkgs.orb.net/earlyaccess/windows/Orb-installer.exe'
 
     ## Vendor-documented silent switches. App flavor only (sensor service is
     ## a different product on the same path - do not mix).
@@ -105,12 +114,74 @@ Try {
     [string]$script:dirFiles = Join-Path -Path $scriptDirectory -ChildPath 'Files'
 
     ##*===============================================
-    ##* PAYLOAD PIN + GROUND-TRUTH ANCHORS (runtime)
+    ##* PAYLOAD ACQUIRE + PIN + GROUND-TRUTH ANCHORS (runtime)
     ##*===============================================
     [string]$script:orbInstaller = Join-Path -Path $script:dirFiles -ChildPath 'Orb-installer.exe'
-    If (-not (Test-Path -LiteralPath $script:orbInstaller -PathType 'Leaf')) {
-        Throw "Orb-installer.exe not found in [$script:dirFiles] - keep the vendor-documented filename."
+
+    function Get-OrbPayload {
+        ## Ensures [$script:orbInstaller] exists AND is trusted. Download
+        ## lane gate = Authenticode (signer Orb Forge); staged lane gate =
+        ## the SHA-256 pin. Untrusted bytes NEVER install.
+        $haveLocal = Test-Path -LiteralPath $script:orbInstaller -PathType 'Leaf'
+        $localOk = $false
+        If ($haveLocal -and $expectedSha256) {
+            $localOk = ((Get-FileHash -LiteralPath $script:orbInstaller -Algorithm 'SHA256').Hash -eq $expectedSha256.ToUpper())
+        }
+        ElseIf ($haveLocal) { $localOk = $true }
+
+        If ($downloadStance -in @('download-first', 'download-only')) {
+            $curl = Join-Path -Path $env:SystemRoot -ChildPath 'System32\curl.exe'
+            $tmp = "$script:orbInstaller.download"
+            Try {
+                If (-not (Test-Path -LiteralPath $curl)) { Throw "curl.exe not found at [$curl] (inbox on Windows 10 1803+)" }
+                Write-Log -Message "Orb: download lane - fetching [$orbDownloadUrl] via curl.exe..."
+                $null = & $curl -sSL --fail --retry 2 --connect-timeout 20 --max-time 300 -o $tmp $orbDownloadUrl
+                If ($LASTEXITCODE -ne 0) { Throw "curl.exe exit $LASTEXITCODE" }
+                If ((Get-Item -Path $tmp).Length -eq 0) { Throw 'downloaded payload is ZERO bytes' }
+                $sig = Get-AuthenticodeSignature -FilePath $tmp
+                If ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notlike '*Orb Forge*') {
+                    Throw "downloaded payload failed the Authenticode gate (status=$($sig.Status) signer=[$($sig.SignerCertificate.Subject)])"
+                }
+                If ($expectedSha256) {
+                    $dlHash = (Get-FileHash -Path $tmp -Algorithm 'SHA256').Hash
+                    If ($dlHash -ne $expectedSha256.ToUpper()) {
+                        Write-Log -Message "ORB_PAYLOAD download hash DRIFT (got $($dlHash.Substring(0,12)).. vs pin $($expectedSha256.Substring(0,12))..) - vendor shipped a newer build; signature gate passed, adopting the fresh build."
+                    }
+                }
+                Move-Item -Path $tmp -Destination $script:orbInstaller -Force
+                Write-Log -Message 'ORB_PAYLOAD source=download (Authenticode gate passed).'
+                Return
+            }
+            Catch {
+                Write-Log -Message "ORB_PAYLOAD download FAILED: $($_.Exception.Message)"
+                Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+                If ($downloadStance -eq 'download-only') {
+                    Throw "download-only stance: download failed and network fallback is disabled - $($_.Exception.Message)"
+                }
+            }
+        }
+
+        If ($localOk) {
+            Write-Log -Message 'ORB_PAYLOAD source=staged-fallback ($dirFiles copy matches pin).'
+            Return
+        }
+        If ($haveLocal) {
+            Throw "Orb-installer.exe in [$script:dirFiles] does NOT match the SHA-256 pin and no trusted download was available - refusing to install unverified bytes; re-pin or re-stage a known-good copy."
+        }
+        Throw "Orb-installer.exe not found in [$script:dirFiles] and the download lane produced nothing trusted - stage the exe or fix client internet access (stance=[$downloadStance])."
     }
+    Switch ($downloadStance) {
+        'download-first' { Get-OrbPayload }
+        'download-only'  { Get-OrbPayload }
+        'local-first'    { Get-OrbPayload }
+        'local-only'     {
+            If (-not (Test-Path -LiteralPath $script:orbInstaller -PathType 'Leaf')) {
+                Throw "Orb-installer.exe not found in [$script:dirFiles] and stance=local-only - stage the payload."
+            }
+        }
+        Default { Throw "invalid `$downloadStance [$downloadStance] - use download-first / download-only / local-first / local-only" }
+    }
+
     If ((Get-Item -LiteralPath $script:orbInstaller).Length -eq 0) {
         Throw "Orb-installer.exe in [$script:dirFiles] is ZERO bytes - bad copy."
     }

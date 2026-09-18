@@ -45,7 +45,9 @@ The payload zip is NOT in this repo (vendor URL below, hash-pinned).
 
 | Variable | Default | Notes |
 |---|---|---|
-| `$zipSha256` | pinned | Re-pin on version swap; empty = skip check (do not ship that way) |
+| `$zipSha256` | pinned | Re-pin on version swap; empty = skip check (do not ship that way). Gates BOTH lanes: the binary is unsigned, so the pin is the only trust anchor — a drifted download is refused, not adopted (vendor rotation observed live 2026-09-18: fresh `latest` zip no longer matches the v1.5.5 pin, which is exactly the case this handles) |
+| `$downloadStance` | `'download-first'` | curl.exe fetch at deploy time with the staged copy as pinned fallback; `'local-first'` / `'local-only'` for airgapped content |
+| `$orbDownloadUrl` | pkgs.orb.net generic latest | The vendor zip URL |
 | `$deployToken` | `''` | Orb Cloud linking token; credential — never commit filled |
 | `$measureServerEnabled` | `$false` | Vendor default is ON (inbound TCP 7443 listener on every device) |
 | `$createFirewallRule` | `$true` | Inbound allow rule for the exe |

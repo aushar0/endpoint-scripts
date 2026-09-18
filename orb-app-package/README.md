@@ -29,7 +29,12 @@ hash-pinned in the wrapper).
     Orb-installer.exe /S /LAUNCH_AT_STARTUP=1 /START_IN_BACKGROUND=1 /ORB_DEPLOYMENT_TOKEN=<token>
     "C:\Program Files\Orb\uninstall.exe" /S
 
-The wrapper adds: payload SHA-256 pin (`$expectedSha256`), a version
+The wrapper adds: **payload acquisition with staged fallback (Lenovo
+pattern)** — `$downloadStance 'download-first'` (default) curl.exe-fetches
+the installer from `https://pkgs.orb.net/earlyaccess/windows/Orb-installer.exe`
+at deploy time, gated by **Authenticode (signer must be Orb Forge)**; the
+staged `Files\` copy (SHA-256-pinned) is the fallback; 'local-first' /
+'local-only' stances available. Plus: payload SHA-256 pin (`$expectedSha256`), a version
 constant (`$appVersion` — the Orb binary carries **no FileVersion**, so
 bump the constant on every payload swap), post-install ground truth
 (binary AND ARP entry checked; NSIS success-without-install fails
