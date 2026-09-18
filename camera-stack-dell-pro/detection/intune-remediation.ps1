@@ -103,7 +103,7 @@
 
 # Path to a local copy of the driver package EXE, used instead of downloading.
 # For air-gapped machines or manual testing.
-param([string]$LocalPackage = '')
+param([string]$LocalPackage = '', [switch]$ShowToast)
 
 # Minutes to wait for the camera to become idle before giving up.
 # Default 45; the Intune Remediations 60-minute cap allows ~50 minutes
@@ -260,6 +260,27 @@ Write-Output "Driver payload ready: $($driverInfFiles.Count) INF files."
 #
 # This is the core of the no-disturbance design: never touch a driver stack
 # that is actively serving a camera stream.
+
+function Show-RestartToast {
+    # Displays a Windows toast notification to the logged-in user suggesting
+    # they restart to complete the camera driver installation. Runs in the
+    # user session via a temporary scheduled task (required because Intune
+    # Remediations executes as SYSTEM, and toasts must come from the user).
+    $toastCommand = '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; '
+    $toastCommand += '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] | Out-Null; '
+    $toastCommand += '`$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; '
+    $toastCommand += "`$xml.LoadXml('<toast scenario=`"reminder`"><visual><binding template=`"ToastGeneric`"><text>Camera Driver Update</text><text>Your camera driver has been installed. Please restart when convenient to finish.</text></binding></visual></toast>'); "
+    $toastCommand += '`$toast = [Windows.UI.Notifications.ToastNotification]::new(`$xml); '
+    $toastCommand += '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Camera Driver").Show(`$toast)'
+
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -Command `"$toastCommand`""
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(3)
+    $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
+    Register-ScheduledTask -TaskName 'CameraDriverToast' -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+    Start-ScheduledTask -TaskName 'CameraDriverToast'
+    Start-Sleep -Seconds 10
+    Unregister-ScheduledTask -TaskName 'CameraDriverToast' -Confirm:$false -ErrorAction SilentlyContinue
+}
 
 function Test-CameraStreaming {
     foreach ($userHive in (Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue)) {
@@ -423,6 +444,9 @@ if ($devicesStillFailing -gt 0 -or $cameraDevicesAfterInstall.Count -eq 0) {
 if ($devicesPendingRestart -gt 0 -or $devicesStillFailing -gt 0) {
     Write-Output "Installed. $devicesPendingRestart device(s) finalize at the next restart."
     Write-Output 'The restart belongs to the user; it is never forced.'
+    if ($ShowToast) {
+        try { Show-RestartToast } catch { Write-Output "Toast notification failed: $($_.Exception.Message) (not fatal)" }
+    }
     exit 3010
 }
 
