@@ -105,6 +105,62 @@
 # For air-gapped machines or manual testing.
 param([string]$LocalPackage = '', [switch]$ShowToast)
 
+# =============================================================================
+# TOAST NOTIFICATION
+# =============================================================================
+# Shows a Windows toast notification to the logged-in user. Intune Remediations
+# and Nexthink run as SYSTEM, which has no user session for toasts. The
+# solution: write a small PowerShell script to a temp location, then create a
+# scheduled task that runs it as the logged-in user (Users group). The task
+# fires, shows the toast via the WinRT API, and self-cleans.
+#
+# Uses only PowerShell (no VBScript, no ServiceUI, no COM registration).
+# This is the same mechanism as PSADT's Execute-ProcessAsUser.
+
+function Show-RestartToast {
+    $toastScript = @'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+$appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+$xml = @"
+<toast scenario="reminder">
+    <visual>
+        <binding template="ToastGeneric">
+            <text>Camera Driver Update</text>
+            <text>Your camera driver has been installed. Please restart when convenient to finish.</text>
+        </binding>
+    </visual>
+    <actions>
+        <action content="OK" arguments="dismiss" activationType="system"/>
+    </actions>
+</toast>
+"@
+$doc = New-Object Windows.Data.Xml.Dom.XmlDocument
+$doc.LoadXml($xml)
+$toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
+'@
+
+    $toastScriptPath = Join-Path $env:ProgramData 'CameraDriverToast.ps1'
+    $toastScript | Set-Content $toastScriptPath -Encoding UTF8
+
+    $taskAction = New-ScheduledTaskAction -Execute 'powershell.exe' `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$toastScriptPath`""
+    $taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(3)
+    # S-1-5-32-545 = Users group; the task runs as the logged-in user
+    $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
+
+    Register-ScheduledTask -TaskName 'CameraDriverToast' `
+        -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Force | Out-Null
+    Start-ScheduledTask -TaskName 'CameraDriverToast'
+
+    # Give the toast time to display, then clean up
+    Start-Sleep -Seconds 10
+    Unregister-ScheduledTask -TaskName 'CameraDriverToast' -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-Item $toastScriptPath -Force -ErrorAction SilentlyContinue
+}
+
 # Minutes to wait for the camera to become idle before giving up.
 # Default 45; the Intune Remediations 60-minute cap allows ~50 minutes
 # of waiting plus ~10 minutes for the remaining phases.
