@@ -13,11 +13,12 @@ fleets that keep remote-assistance clients off endpoints by default.
 
 **Status:** lab battery FULL PASS 2026-09-13 (install x2, repair, uninstall
 x2, SYSTEM context — all exit 0, zero uninstall residue; detection
-true-positive x3, true-negative x4). v1.1.0 (2026-09-18): two-lane
-installer acquire — download-lane live probe plus a 6-check acquire
-harness, all green (no install executed in that pass; see
-[Test ledger](#test-ledger)). Not lab-testable: tenant authentication,
-licensing, and session behavior.
+true-positive x3, true-negative x4). v1.1.x (2026-09-18): two-lane
+installer acquire in the Lenovo-style folder layout (`Files\Download\`
+runtime fetch + `Files\Fallback\` staged copy) — download-lane live probe
+plus a 6-check acquire harness, all green (no install executed in that
+pass; see [Test ledger](#test-ledger)). Not lab-testable: tenant
+authentication, licensing, and session behavior.
 
 ## Contents
 
@@ -37,10 +38,11 @@ from Microsoft at package time — see below.
   route). This wrapper is the `Deploy-Application.ps1` that sits at the
   toolkit root.
 - `remotehelpinstaller.exe` from <https://aka.ms/downloadremotehelp>
-  (public, evergreen) — **either staged in the package's `Files\` folder
-  (offline-deterministic) or omitted entirely**: the download lane fetches
-  it from the same link at deploy time. The filename is coupled to the
-  vendor-documented commands and must not change.
+  (public, evergreen) — **either staged in the package's
+  `Files\Fallback\` folder (offline-deterministic) or omitted entirely**:
+  the download lane fetches it from the same link at deploy time into
+  `Files\Download\`. The filename is coupled to the vendor-documented
+  commands and must not change.
 - Outbound HTTPS to `aka.ms` at deploy time, unless you stage the
   installer (see acquire lanes below).
 - WebView2 Runtime — bundled by the installer when missing (and left
@@ -52,8 +54,10 @@ from Microsoft at package time — see below.
 <toolkit root>\
     Deploy-Application.ps1        <- this wrapper
     AppDeployToolkit\             <- stock PSADT 3.10.x
-    Files\                        <- OPTIONAL since v1.1.0
-        remotehelpinstaller.exe   <- staged fallback copy (from aka.ms); may be omitted
+    Files\
+        Download\                 <- created by the wrapper at deploy time
+        Fallback\                 <- OPTIONAL staged copy (unarmed when empty)
+            remotehelpinstaller.exe
 ```
 
 If you stage the installer, verify the download against the pin in the
@@ -68,18 +72,22 @@ wrapper and update it if the evergreen link served a newer build:
 The wrapper derives app version from the EXE at runtime; a version bump is
 "swap the file, update the pin", nothing else to edit.
 
-## Installer acquire — two lanes, two gates (v1.1.0)
+## Installer acquire — two lanes, two gates (Lenovo-style folders)
 
-`$acquireStance` in the wrapper picks the lane order:
+`$acquireStance` in the wrapper picks the lane order. Both lanes work out
+of the package's `Files\` tree — `Download\` (created at runtime, where the
+fetch lands, so the acquire evidence stays with the package in ccmcache)
+and `Fallback\` (your staged copy; unarmed when empty):
 
 - **`download-first` (default)** — fetch the current build from
   <https://aka.ms/downloadremotehelp> at deploy time with the OS-inbox
-  `curl.exe`. The gate is the **Authenticode signature** (status Valid and
+  `curl.exe`, landing it in `Files\Download\`. The gate is the
+  **Authenticode signature** (status Valid and
   signer Microsoft Corporation), because the link rotates and a hash
   cannot pre-pin a rotating target. On any failure (network, proxy,
   signature) it falls back to the staged copy.
-- **`local-first`** — the staged `Files\` copy wins (gate = SHA-256 pin);
-  download only when nothing is staged.
+- **`local-first`** — the staged `Files\Fallback\` copy wins (gate =
+  SHA-256 pin); download only when nothing is staged.
 - **`local-only`** — never touches the network (air-gapped fleets).
 
 Both lanes dead → exit **60005** (distinct from 60001 for triage), reason

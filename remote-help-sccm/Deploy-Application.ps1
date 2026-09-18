@@ -28,7 +28,8 @@
     fetches the current build from aka.ms at deploy time - the gate is the
     Authenticode signature (signer must be Microsoft Corporation), because
     the link rotates and a hash cannot pre-pin a rotating target - with
-    fallback to the staged copy in Files\remotehelpinstaller.exe, which the
+    fallback to the staged copy in Files\Fallback\remotehelpinstaller.exe,
+    which the
     $expectedSha256 pin guards instead. 'local-first' prefers the staged
     copy; 'local-only' never touches the network. Exit 60005 = no installer
     obtainable from any lane.
@@ -67,7 +68,7 @@ Try {
     [string]$appArch          = 'x64'
     [string]$appLang          = 'EN'
     [string]$appRevision      = '01'
-    [string]$appScriptVersion = '1.1.0'
+    [string]$appScriptVersion = '1.1.1'
     [string]$appScriptDate    = '2026-09-18'
     [string]$appScriptAuthor  = 'endpoint engineering'
 
@@ -121,14 +122,20 @@ Try {
     ##* gated by Authenticode signer because aka.ms rotates - a hash cannot
     ##* pre-pin a rotating target; the staged copy is gated by the SHA-256 pin).
     ##*===============================================
-    [string]$script:rhLocalCopy = Join-Path -Path $script:dirFiles -ChildPath 'remotehelpinstaller.exe'
+    # Lenovo Commercial Vantage folder convention: acquire artifacts live in
+    # package subfolders - Files\Fallback\ = staged pinned copy (unarmed when
+    # absent), Files\Download\ = where the runtime fetch lands.
+    [string]$script:rhLocalCopy = Join-Path -Path $script:dirFiles -ChildPath 'Fallback\remotehelpinstaller.exe'
     [string]$script:rhInstaller = $null
     [string]$script:rhAcquireLane = 'none'
 
     Function Get-RhDownloadedInstaller {
         # Download lane: aka.ms -> TEMP; gates = file exists, non-zero,
         # Authenticode Valid + signer Microsoft Corporation. Returns path or $null.
-        [string]$dlDir  = Join-Path -Path $env:TEMP -ChildPath 'RemoteHelpPackage'
+        # Lenovo-style: the fetch lands INSIDE the package folder (Download\),
+        # not %TEMP% - the acquire evidence stays with the package in ccmcache
+        # (%TEMP% gets cleaned and hides the trail).
+        [string]$dlDir  = Join-Path -Path $script:dirFiles -ChildPath 'Download'
         [string]$dlPath = Join-Path -Path $dlDir -ChildPath 'remotehelpinstaller.exe'
         Try {
             New-Item -ItemType Directory -Force -Path $dlDir | Out-Null
@@ -157,10 +164,11 @@ Try {
     }
 
     Function Get-RhLocalInstaller {
-        # Local lane: staged copy in Files\; gates = exists, non-zero, SHA-256 pin.
+        # Local lane: staged copy in Files\Fallback\; gates = exists, non-zero,
+        # SHA-256 pin. Absent folder = unarmed (download lane covers it).
         # The vendor-documented commands are name-coupled - keep the exact filename.
         Try {
-            If (-not (Test-Path -LiteralPath $script:rhLocalCopy -PathType 'Leaf')) { Throw "no staged copy at [$script:rhLocalCopy] (Files\ lane unarmed - optional since the download lane exists)" }
+            If (-not (Test-Path -LiteralPath $script:rhLocalCopy -PathType 'Leaf')) { Throw "no staged copy at [$script:rhLocalCopy] (Fallback\ lane unarmed - fine when the download lane is available)" }
             If ((Get-Item -LiteralPath $script:rhLocalCopy).Length -eq 0) { Throw 'staged copy is ZERO bytes - bad copy' }
             If ($expectedSha256) {
                 [string]$actualHash = (Get-FileHash -Path $script:rhLocalCopy -Algorithm 'SHA256').Hash
