@@ -390,6 +390,12 @@ if ($currentFirmwareVersion -and ([version]$currentFirmwareVersion -lt [version]
 # may truncate. Everything a support engineer needs to triage is in this one
 # line: what needs updating, what is broken, firmware state, upgrade recency,
 # and the Frame Server error count.
+#
+# BROKEN is driven by device problem codes (10 = cannot start, 14 = needs
+# restart, 28 = no driver, etc.), NOT by Frame Server errors. A dead camera
+# often generates zero Frame Server events because there is nothing to connect
+# to. fsErr7d is a supplementary signal that catches intermittent failures on
+# cameras that otherwise report a clean problem code.
 
 $outdatedComponentNames = (@($outdatedComponents + $misboundComponents) | ForEach-Object { ($_ -split ':')[0] }) -join ','
 $brokenComponentNames   = (@($activeDeviceProblems) | ForEach-Object { ($_ -split ' ')[0] }) -join ','
@@ -403,7 +409,7 @@ if ($brokenComponentNames)   { $verdictHeadline += " | BROKEN: $brokenComponentN
 if ($deliberatelyDisabled)   { $verdictHeadline += ' | disabled-by-choice' }
 $verdictHeadline += " | fw:$(if ($currentFirmwareVersion) { $currentFirmwareVersion } else { 'n/a' })"
 $verdictHeadline += " | upg:$($operatingSystem.InstallDate.ToString('yyyy-MM-dd'))"
-$verdictHeadline += " | err7d:$frameServerErrorCount"
+$verdictHeadline += " | fsErr7d:$frameServerErrorCount"
 
 Write-Output $verdictHeadline
 Write-Output ''
