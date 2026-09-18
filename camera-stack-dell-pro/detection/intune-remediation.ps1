@@ -1,13 +1,27 @@
 <#
 .SYNOPSIS
-    Installs the Intel camera driver stack on a Dell Pro laptop, waits for an
-    idle camera, cleans up superseded driver packages, and verifies the result.
+    Installs the Intel camera driver stack and attempts live device recovery.
 
 .DESCRIPTION
     This script is the remediation half of an Intune Remediations package.
     It runs only after the detection script (intune-detection.ps1) exits 1,
-    meaning at least one camera-stack component is below its target version
-    or Intel hardware is bound to a generic Windows inbox driver.
+    meaning the camera is broken: a device has a nonzero problem code, or
+    no camera devices are present at all.
+
+    PRIMARY SCENARIO: the camera vanished. The Intel ISP (Image Signal
+    Processor) wedges during a power-state transition, causing the camera
+    device to stop enumerating. The camera disappears from Device Manager;
+    Teams and the Windows Camera app report no camera found. The fix
+    requires the driver staged (this script installs it) plus a device
+    rescan or reboot to re-enumerate the vanished node.
+
+    The script attempts live recovery first: install the driver, rescan
+    devices, restart problem devices. If the camera comes back, it is
+    fixed without a restart. If not, the script exits 3010 (restart
+    pending) and the camera returns at the user next reboot.
+
+    When no camera device is present, the camera-idle wait passes
+    instantly because nothing is streaming.
 
     Intune imposes a 60-minute hard timeout on remediation scripts. This
     script's phases are budgeted to fit within that window:
