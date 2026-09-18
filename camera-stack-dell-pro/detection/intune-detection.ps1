@@ -48,10 +48,10 @@
        driver). Camera-class device count is verified. Frame Server error
        events from the trailing 7 days are counted.
 
-    6. Output. A verdict headline is printed first (so it survives any
-       column-preview truncation in the Intune portal), followed by
-       diagnostic detail lines. Total output stays well under the 4 KB
-       Intune truncation limit.
+    6. Output. All data goes on a single line (verdict first, then causes,
+       then context). Intune Remediations truncates detection output at
+       2048 characters; our typical output is 150-350 characters, leaving
+       ample headroom. (Platform scripts have a 10,000-character limit.)
 
 .NOTES
     File name     : intune-detection.ps1
