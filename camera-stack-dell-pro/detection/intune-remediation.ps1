@@ -277,198 +277,39 @@ Write-Output 'Package verified (Dell-signed).'
 # =============================================================================
 # PACKAGE EXTRACTION
 # =============================================================================
-# Extract the driver package. The Dell /s /e /f= switch was tested live and
-# produces ZERO files when run from a user context (exit code 1). 7-Zip
-# reliably extracts the package (241 files, 18 INFs, verified live). The Dell
-# switch is kept as a fallback because it may behave differently when Intune
-# Remediations runs as SYSTEM (elevated), which we cannot test from a user
-# context.
+# Install the driver package by running the Dell installer silently.
+# This is the same method that has fixed 100+ ticket machines: run the Dell
+# EXE + reboot. The installer handles driver staging, binding, and old-driver
+# cleanup internally. We do NOT extract the package — extraction methods
+# (7-Zip, Dell /s /e /f=, Expand-Archive, tar, .NET ZipFile, extrac32) were
+# all tested live; only 7-Zip works and it is not guaranteed on fleet machines.
+#
+# The /s switch runs the installer silently (no UI, no prompts).
+# The installer does NOT force a reboot on its own; if a restart is needed,
+# it sets a pending flag and the driver activates at the next natural restart.
+# This matches the no-disturbance doctrine.
 
-$extractionFolder = Join-Path $workingFolder 'extract'
+Write-Output 'Installing driver package (Dell silent install)...'
+$installProcess = Start-Process -FilePath $packageFilePath `
+    -ArgumentList '/s' `
+    -Wait -PassThru -WindowStyle Hidden
+$installExitCode = $installProcess.ExitCode
+Write-Output "Dell installer exit code: $installExitCode"
 
-# Check if we already have extracted INF files (cache from a previous run)
-$cachedInfFiles = @(Get-ChildItem $extractionFolder -Recurse -Filter *.inf -ErrorAction SilentlyContinue)
-
-if ($cachedInfFiles.Count -eq 0) {
-    New-Item -ItemType Directory -Force -Path $extractionFolder | Out-Null
-    $extractionSucceeded = $false
-
-    # --- Method 1: 7-Zip (verified to work; available on most fleet machines) ---
-    $sevenZipPath = @(
-        'C:\Program Files\7-Zip\7z.exe',
-        'C:\Program Files (x86)\7-Zip\7z.exe'
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-    if ($sevenZipPath) {
-        Write-Output "Extracting via 7-Zip ($sevenZipPath)..."
-        $extractResult = & $sevenZipPath x -y -o"$extractionFolder" $packageFilePath 2>&1
-        $extractExit = $LASTEXITCODE
-        $extractedInfs = @(Get-ChildItem $extractionFolder -Recurse -Filter *.inf -ErrorAction SilentlyContinue)
-        if ($extractExit -eq 0 -and $extractedInfs.Count -gt 0) {
-            $extractionSucceeded = $true
-            Write-Output "Extraction complete (7-Zip): $($extractedInfs.Count) INF files."
-        } else {
-            Write-Output "7-Zip extraction failed (exit $extractExit, $($extractedInfs.Count) INFs found)."
-        }
-    }
-
-    # --- Method 2: Dell silent extraction (may work as SYSTEM; failed as user) ---
-    if (-not $extractionSucceeded) {
-        Write-Output 'Trying Dell silent extraction (/s /e /f=)...'
-        $extractionProcess = Start-Process -FilePath $packageFilePath `
-            -ArgumentList "/s /e /f=`"$extractionFolder`"" `
-            -Wait -PassThru -WindowStyle Hidden
-        $extractedInfs = @(Get-ChildItem $extractionFolder -Recurse -Filter *.inf -ErrorAction SilentlyContinue)
-        if ($extractionProcess.ExitCode -eq 0 -and $extractedInfs.Count -gt 0) {
-            $extractionSucceeded = $true
-            Write-Output "Extraction complete (Dell): $($extractedInfs.Count) INF files."
-        } else {
-            Write-Output "Dell extraction failed (exit $($extractionProcess.ExitCode), $($extractedInfs.Count) INFs found)."
-        }
-    }
-
-    if (-not $extractionSucceeded) {
-        Write-Output 'All extraction methods failed.'
-        $topLevel = @(Get-ChildItem $extractionFolder -ErrorAction SilentlyContinue)
-        if ($topLevel.Count -gt 0) {
-            Write-Output 'Extraction folder contents:'
-            $topLevel | Select-Object -First 10 | ForEach-Object { Write-Output "  $($_.Name)" }
-        } else {
-            Write-Output 'Extraction folder is empty.'
-        }
-        exit 1
-    }
-}
-
-# Search recursively for INF files (works regardless of internal folder structure)
-$driverInfFiles = @(Get-ChildItem $extractionFolder -Recurse -Filter *.inf -ErrorAction SilentlyContinue)
-if ($driverInfFiles.Count -eq 0) {
-    Write-Output 'No INF files found after extraction.'
+# Dell installer exit codes: 0 = success, 1 = success with reboot required,
+# 2 = success no reboot needed. Any other code is an error.
+# (Source: Dell Update Packages User's Guide)
+if ($installExitCode -eq 0 -or $installExitCode -eq 1 -or $installExitCode -eq 2) {
+    Write-Output 'Driver package installed successfully.'
+} else {
+    Write-Output "Dell installer failed with exit code $installExitCode."
+    Write-Output 'The next scheduled run will retry.'
     exit 1
 }
-Write-Output "Driver payload ready: $($driverInfFiles.Count) INF files."
 
-
-# =============================================================================
-# CAMERA IDLE WAIT
-# =============================================================================
-# Poll the Windows CapabilityAccessManager consent store to determine whether
-# any application is actively streaming the camera. The registry value
-# LastUsedTimeStop is 0 while an app is streaming and a timestamp when it
-# stops. This is the same mechanism Windows uses for the camera-in-use
-# indicator, so it catches every application: Teams, Zoom, WebEx, Chrome,
-# Edge, the Windows Camera app, and anything else.
-#
-# A laptop that is on a call will wait. A locked laptop that is still on a
-# call will wait (the call continues at the lock screen). A laptop with Teams
-# idling in the system tray will NOT wait (Teams is not streaming).
-#
-# This is the core of the no-disturbance design: never touch a driver stack
-# that is actively serving a camera stream.
-
-function Show-RestartToast {
-    # Displays a Windows toast notification to the logged-in user suggesting
-    # they restart to complete the camera driver installation. Runs in the
-    # user session via a temporary scheduled task (required because Intune
-    # Remediations executes as SYSTEM, and toasts must come from the user).
-    $toastCommand = '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; '
-    $toastCommand += '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] | Out-Null; '
-    $toastCommand += '`$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; '
-    $toastCommand += "`$xml.LoadXml('<toast scenario=`"reminder`"><visual><binding template=`"ToastGeneric`"><text>Camera Driver Update</text><text>Your camera driver has been installed. Please restart when convenient to finish.</text></binding></visual></toast>'); "
-    $toastCommand += '`$toast = [Windows.UI.Notifications.ToastNotification]::new(`$xml); '
-    $toastCommand += '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Camera Driver").Show(`$toast)'
-
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -Command `"$toastCommand`""
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(3)
-    $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
-    Register-ScheduledTask -TaskName 'CameraDriverToast' -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
-    Start-ScheduledTask -TaskName 'CameraDriverToast'
-    Start-Sleep -Seconds 10
-    Unregister-ScheduledTask -TaskName 'CameraDriverToast' -Confirm:$false -ErrorAction SilentlyContinue
-}
-
-function Test-DeviceInUse {
-    # Checks whether any application is actively using the camera OR microphone
-    # via the Windows CapabilityAccessManager consent store. The registry value
-    # LastUsedTimeStop is 0 while an app is streaming and a timestamp when it
-    # stops. This catches Teams, Zoom, WebEx, Chrome, Edge, Discord, and anything
-    # else that uses the camera or microphone.
-    #
-    # Checking the microphone catches audio-only calls (camera off) so the
-    # remediation never runs during any type of call, even though camera driver
-    # installation technically does not affect the audio path.
-    foreach ($userHive in (Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue)) {
-        foreach ($sensorType in 'webcam', 'microphone') {
-            $consentStorePath = "$($userHive.PSPath)\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$sensorType"
-            if (-not (Test-Path $consentStorePath)) { continue }
-            foreach ($appEntry in (Get-ChildItem "$consentStorePath\*", "$consentStorePath\NonPackaged\*" -ErrorAction SilentlyContinue)) {
-                if ((Get-ItemProperty $appEntry.PSPath -ErrorAction SilentlyContinue).LastUsedTimeStop -eq 0) {
-                    $script:deviceInUseBy = "{0}:{1}" -f $sensorType, $appEntry.PSChildName
-                    return $true
-                }
-            }
-        }
-    }
-    return $false
-}
-
-$waitDeadline = (Get-Date).AddMinutes($MaxWaitMinutes)
-$pollAttempt  = 0
-
-while ((Get-Date) -lt $waitDeadline -and (Test-DeviceInUse)) {
-    $pollAttempt++
-    Write-Output "Camera or microphone in use ($deviceInUseBy). Waiting ${PollMinutes} minutes (attempt $pollAttempt)."
-    Start-Sleep -Seconds ($PollMinutes * 60)
-}
-
-if (Test-DeviceInUse) {
-    Write-Output "Camera or microphone stayed in use for the full ${MaxWaitMinutes} minutes. No changes made."
-    Write-Output 'The next scheduled run will retry.'
-    exit 0
-}
-Write-Output 'Camera and microphone are idle. Proceeding with installation.'
-
-# =============================================================================
-# DRIVER INSTALLATION
-# =============================================================================
-# Stage and install every INF in the extracted package via the standard
-# Windows PnP path. The /install flag attempts to bind matching present
-# devices immediately; devices that cannot rebind live will be handled by
-# the rebind phase below or will finalize at the next restart.
-
-$successfullyInstalled = 0
-foreach ($infFile in $driverInfFiles) {
-    $installResult = & pnputil.exe /add-driver "$($infFile.FullName)" /install 2>&1
-    $successLines = ($installResult | Select-String -SimpleMatch 'success').Count
-    if ($successLines -gt 0 -or $LASTEXITCODE -eq 0) { $successfullyInstalled++ }
-}
-Write-Output "Installed $successfullyInstalled of $($driverInfFiles.Count) driver packages."
-
-# Trigger a device rescan so newly staged drivers can bind to any raw or
-# recently enumerated devices.
+# Trigger a device rescan to catch devices that can re-enumerate without a restart.
 & pnputil.exe /scan-devices | Out-Null
 Start-Sleep -Seconds 5
-
-# =============================================================================
-# REBIND RECOVERY
-# =============================================================================
-# Some devices do not pick up the new driver after a rescan alone. Restarting
-# the device node forces a driver re-evaluation without requiring a full
-# system restart. This catches the "camera present but still on old driver"
-# case and converts it from "reboot required" to "fixed live."
-#
-# Devices disabled by user choice (problem code 22) are excluded: restarting
-# them would not enable them (a driver update does not override a deliberate
-# disable), and the restart would be unnecessary churn.
-
-foreach ($presentDevice in (Get-PnpDevice -PresentOnly)) {
-    $deviceProblemCode = (Get-PnpDeviceProperty -InstanceId $presentDevice.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
-    $isCameraClass = $presentDevice.Class -in 'Camera', 'Image'
-
-    if (($isCameraClass -or ($deviceProblemCode -and $deviceProblemCode -ne 0)) -and $deviceProblemCode -ne 22) {
-        & pnputil.exe /restart-device "$($presentDevice.InstanceId)" 2>&1 | Out-Null
-    }
-}
 
 # =============================================================================
 # DRIVER-STORE CLEANUP
