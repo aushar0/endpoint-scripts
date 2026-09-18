@@ -196,14 +196,19 @@ if (-not (Test-Path $packageFilePath)) {
         exit 1
     }
     Write-Output "Downloading $($selectedPackage.PackageFileName)..."
+    # Download with fallback chain: HttpClient → Invoke-WebRequest → BITS.
+    # HttpClient is preferred but corporate proxies and SSL inspection can
+    # cause 403 Forbidden on some networks. Invoke-WebRequest routes through
+    # the WinHTTP proxy stack. BITS routes through Windows' own transfer
+    # service and handles corporate proxies, authentication, and throttling
+    # automatically.
+    $downloadSucceeded = $false
+
+    # --- Method 1: HttpClient with User-Agent ---
     try {
-        # Download via HttpClient with streaming (works in any context,
-        # no Windows service dependencies). User-Agent header is required
-        # because Dell's CDN rejects requests without one (403 Forbidden).
         Add-Type -AssemblyName System.Net.Http
         $httpClient = [System.Net.Http.HttpClient]::new()
         $httpClient.Timeout = [TimeSpan]::FromMinutes(10)
-        # Dell's CDN returns 403 without a browser-like User-Agent header.
         $httpClient.DefaultRequestHeaders.Add('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
         $httpResponse = $httpClient.GetAsync($selectedPackage.DownloadUrl, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
         $httpResponse.EnsureSuccessStatusCode()
@@ -216,8 +221,39 @@ if (-not (Test-Path $packageFilePath)) {
         $fileStream.Close()
         $downloadStream.Close()
         $httpClient.Dispose()
+        $downloadSucceeded = $true
+        Write-Output 'Download complete (HttpClient).'
     } catch {
-        Write-Output "Download failed: $($_.Exception.Message). The next scheduled run will retry."
+        Write-Output "HttpClient download failed: $($_.Exception.Message)"
+    }
+
+    # --- Method 2: Invoke-WebRequest with User-Agent ---
+    if (-not $downloadSucceeded) {
+        Write-Output 'Trying Invoke-WebRequest...'
+        try {
+            Invoke-WebRequest -Uri $selectedPackage.DownloadUrl -OutFile $packageFilePath `
+                -UserAgent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' -UseBasicParsing -TimeoutSec 600
+            $downloadSucceeded = $true
+            Write-Output 'Download complete (Invoke-WebRequest).'
+        } catch {
+            Write-Output "Invoke-WebRequest download failed: $($_.Exception.Message)"
+        }
+    }
+
+    # --- Method 3: BITS (handles corporate proxies, authentication, throttling) ---
+    if (-not $downloadSucceeded) {
+        Write-Output 'Trying BITS transfer...'
+        try {
+            Start-BitsTransfer -Source $selectedPackage.DownloadUrl -Destination $packageFilePath -ErrorAction Stop
+            $downloadSucceeded = $true
+            Write-Output 'Download complete (BITS).'
+        } catch {
+            Write-Output "BITS download failed: $($_.Exception.Message)"
+        }
+    }
+
+    if (-not $downloadSucceeded) {
+        Write-Output 'All download methods failed. The next scheduled run will retry.'
         exit 1
     }
 }
