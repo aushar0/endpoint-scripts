@@ -103,7 +103,14 @@
 
 # Path to a local copy of the driver package EXE, used instead of downloading.
 # For air-gapped machines or manual testing.
-param([string]$LocalPackage = '', [switch]$ShowToast)
+param(
+    [string]$LocalPackage = '',
+    [switch]$ShowToast,
+    [string]$ToastTitle   = '',   # optional: custom title (default: "Camera Driver Update")
+    [string]$ToastMessage = '',   # optional: custom body text
+    [string]$ToastIcon    = '',   # optional: path to icon PNG (48x48 recommended, shown circular)
+    [string]$ToastBanner  = ''    # optional: path to banner PNG (364x180 recommended, shown at top)
+)
 
 # =============================================================================
 # TOAST NOTIFICATION
@@ -118,29 +125,50 @@ param([string]$LocalPackage = '', [switch]$ShowToast)
 # This is the same mechanism as PSADT's Execute-ProcessAsUser.
 
 function Show-RestartToast {
-    $toastScript = @'
+    # Builds the toast XML with optional icon, banner, title, and message.
+    # Icon: 48x48 px PNG, shown as a circle on the left (hint-crop="circle").
+    #       Provide at 96x96 or 144x144 for high-DPI displays (auto-scaled).
+    # Banner: 364x180 px PNG, shown as a wide hero image at the top.
+    #         Provide at 728x360 for high-DPI displays.
+    # Images use file:/// protocol with forward slashes.
+
+    $effectiveTitle   = if ($ToastTitle)   { $ToastTitle }   else { 'Camera Driver Update' }
+    $effectiveMessage = if ($ToastMessage) { $ToastMessage } else { 'Your camera driver has been installed. Please restart when convenient to finish.' }
+
+    # Build the image XML elements only if paths are provided and files exist
+    $iconXml   = if ($ToastIcon -and (Test-Path $ToastIcon)) {
+        $iconUri = ($ToastIcon -replace '\\', '/') -replace '^\w:', 'file:///$0'
+        "            <image src=`"$($ToastIcon -replace '\\', '/')`" placement=`"appLogoOverride`" hint-crop=`"circle`"/>"
+    }
+    $bannerXml = if ($ToastBanner -and (Test-Path $ToastBanner)) {
+        "            <image src=`"$($ToastBanner -replace '\\', '/')`" placement=`"hero`"/>"
+    }
+
+    $toastScript = @"
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
 [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
-$appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
-$xml = @"
+`$appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+`$xml = @'
 <toast scenario="reminder">
     <visual>
         <binding template="ToastGeneric">
-            <text>Camera Driver Update</text>
-            <text>Your camera driver has been installed. Please restart when convenient to finish.</text>
+            <text>$effectiveTitle</text>
+            <text>$effectiveMessage</text>
+$iconXml
+$bannerXml
         </binding>
     </visual>
     <actions>
         <action content="OK" arguments="dismiss" activationType="system"/>
     </actions>
 </toast>
-"@
-$doc = New-Object Windows.Data.Xml.Dom.XmlDocument
-$doc.LoadXml($xml)
-$toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
 '@
+`$doc = New-Object Windows.Data.Xml.Dom.XmlDocument
+`$doc.LoadXml(`$xml)
+`$toast = [Windows.UI.Notifications.ToastNotification]::new(`$doc)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(`$appId).Show(`$toast)
+"@
 
     $toastScriptPath = Join-Path $env:ProgramData 'CameraDriverToast.ps1'
     $toastScript | Set-Content $toastScriptPath -Encoding UTF8
@@ -148,14 +176,12 @@ $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
     $taskAction = New-ScheduledTaskAction -Execute 'powershell.exe' `
         -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$toastScriptPath`""
     $taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(3)
-    # S-1-5-32-545 = Users group; the task runs as the logged-in user
     $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
 
     Register-ScheduledTask -TaskName 'CameraDriverToast' `
         -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Force | Out-Null
     Start-ScheduledTask -TaskName 'CameraDriverToast'
 
-    # Give the toast time to display, then clean up
     Start-Sleep -Seconds 10
     Unregister-ScheduledTask -TaskName 'CameraDriverToast' -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Item $toastScriptPath -Force -ErrorAction SilentlyContinue
