@@ -106,10 +106,11 @@
 param(
     [string]$LocalPackage = '',
     [switch]$ShowToast,
-    [string]$ToastTitle   = '',   # optional: custom title (default: "Camera Driver Update")
-    [string]$ToastMessage = '',   # optional: custom body text
-    [string]$ToastIcon    = '',   # optional: path to icon PNG (48x48 recommended, shown circular)
-    [string]$ToastBanner  = ''    # optional: path to banner PNG (364x180 recommended, shown at top)
+    [string]$ToastAppName  = 'IT Support',  # shown as the notification source (pass your org's name at deploy time)
+    [string]$ToastTitle    = '',             # optional: overrides default title
+    [string]$ToastMessage  = '',             # optional: overrides default body
+    [string]$ToastIcon     = '',             # optional: path to icon PNG (48x48, shown circular)
+    [string]$ToastBanner   = ''              # optional: path to banner PNG (364x180, hero image)
 )
 
 # =============================================================================
@@ -125,30 +126,163 @@ param(
 # This is the same mechanism as PSADT's Execute-ProcessAsUser.
 
 function Show-RestartToast {
-    # Builds the toast XML with optional icon, banner, title, and message.
-    # Icon: 48x48 px PNG, shown as a circle on the left (hint-crop="circle").
-    #       Provide at 96x96 or 144x144 for high-DPI displays (auto-scaled).
-    # Banner: 364x180 px PNG, shown as a wide hero image at the top.
-    #         Provide at 728x360 for high-DPI displays.
-    # Images use file:/// protocol with forward slashes.
+    # Shows a toast with a custom app name (not "Windows PowerShell").
+    # Requires a one-time AUMID registration: a Start Menu shortcut with the
+    # AppUserModel.ID property set. After registration, all toasts from this
+    # script show the custom app name. Uses PowerShell only (no VBScript).
 
     $effectiveTitle   = if ($ToastTitle)   { $ToastTitle }   else { 'Camera Driver Update' }
     $effectiveMessage = if ($ToastMessage) { $ToastMessage } else { 'Your camera driver has been installed. Please restart when convenient to finish.' }
 
-    # Build the image XML elements only if paths are provided and files exist
+    # --- AUMID registration (one-time; safe to re-run) ---
+    # Uses a Start Menu shortcut + the Shell COM object to set the
+    # System.AppUserModel.ID property, which controls the toast's display name.
+    $aumid = 'EndpointManagement.Toast'
+    $shortcutPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\$ToastAppName.lnk"
+
+    if (-not (Test-Path $shortcutPath)) {
+        $wshShell = New-Object -ComObject WScript.Shell
+        $shortcut = $wshShell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = 'powershell.exe'
+        $shortcut.Description = $ToastAppName
+        $shortcut.WindowStyle = 7  # minimized
+        $shortcut.Save()
+        Write-Output "Registered toast app shortcut: $shortcutPath"
+    }
+
+    # Set the AUMID on the shortcut using the Shell property system.
+    # This uses inline C# to access the IPropertyStore interface.
+    if (-not ('AumidSetter' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public class AumidSetter
+{
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROPERTYKEY
+    {
+        public Guid fmtid;
+        public int pid;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    public struct PROPVARIANT
+    {
+        [FieldOffset(0)] public ushort vt;
+        [FieldOffset(8)] public IntPtr pointerValue;
+    }
+
+    [ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IPropertyStore
+    {
+        [PreserveSig] int GetCount(out uint cProps);
+        [PreserveSig] int GetAt(uint iProp, out PROPERTYKEY pkey);
+        [PreserveSig] int GetValue(ref PROPERTYKEY key, out PROPVARIANT pv);
+        [PreserveSig] int SetValue(ref PROPERTYKEY key, ref PROPVARIANT pv);
+        [PreserveSig] int Commit();
+    }
+
+    [ComImport, Guid("000214F9-0000-0000-C000-000000000046")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellLinkW
+    {
+        [PreserveSig] int GetPath([Out] System.Text.StringBuilder pszFile, int cch, IntPtr pfd, uint fFlags);
+        [PreserveSig] int GetIDList(out IntPtr ppidl);
+        [PreserveSig] int SetIDList(IntPtr pidl);
+        [PreserveSig] int GetDescription([Out] System.Text.StringBuilder pszName, int cch);
+        [PreserveSig] int SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+        [PreserveSig] int GetWorkingDirectory([Out] System.Text.StringBuilder pszDir, int cch);
+        [PreserveSig] int SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+        [PreserveSig] int GetArguments([Out] System.Text.StringBuilder pszArgs, int cch);
+        [PreserveSig] int SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+        [PreserveSig] int GetHotkey(out short pwHotkey);
+        [PreserveSig] int SetHotkey(short wHotkey);
+        [PreserveSig] int GetShowCmd(out int piShowCmd);
+        [PreserveSig] int SetShowCmd(int iShowCmd);
+        [PreserveSig] int GetIconLocation([Out] System.Text.StringBuilder pszIconPath, int cch, out int piIcon);
+        [PreserveSig] int SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+        [PreserveSig] int SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+        [PreserveSig] int Resolve(IntPtr hwnd, uint fFlags);
+        [PreserveSig] int SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+    }
+
+    [ComImport, Guid("0000010B-0000-0000-C000-000000000046")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IPersistFile
+    {
+        [PreserveSig] int GetCurFile([Out] System.Text.StringBuilder pszFile);
+        [PreserveSig] int Load([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, uint dwMode);
+        [PreserveSig] int Save([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, [MarshalAs(UnmanagedType.Bool)] bool fRemember);
+        [PreserveSig] int SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string pszFileName);
+    }
+
+    [DllImport("propsys.dll", CharSet = CharSet.Unicode)]
+    static extern int InitPropVariantFromString(
+        [MarshalAs(UnmanagedType.LPWStr)] string psz,
+        out PROPVARIANT ppropvar);
+
+    [DllImport("ole32.dll")]
+    static extern int PropVariantClear(ref PROPVARIANT ppropvar);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    static extern int SHLoadLibraryFromKnownFolder(
+        ref Guid rfid, uint dwMode, ref Guid riid, out IntPtr ppv);
+
+    public static void SetAumid(string shortcutPath, string aumid)
+    {
+        // Load the shortcut as an IShellLinkW
+        IShellLinkW shellLink = (IShellLinkW)new ShellLinkObject();
+        IPersistFile persistFile = (IPersistFile)shellLink;
+        persistFile.Load(shortcutPath, 0); // STGM_READ = 0
+
+        // Get the IPropertyStore from the shell link
+        // IShellLinkW does not directly expose IPropertyStore, so we use
+        // the IPersistFile + IPropertyStore pattern via interop
+        IPropertyStore propStore = (IPropertyStore)shellLink;
+
+        // Set the System.AppUserModel.ID property
+        PROPERTYKEY aumidKey = new PROPERTYKEY();
+        aumidKey.fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
+        aumidKey.pid = 5; // PID_APPUSERMODEL_ID
+
+        PROPVARIANT value = new PROPVARIANT();
+        InitPropVariantFromString(aumid, out value);
+        propStore.SetValue(ref aumidKey, ref value);
+        propStore.Commit();
+        PropVariantClear(ref value);
+
+        // Save the shortcut with the updated property
+        persistFile.Save(shortcutPath, false);
+    }
+
+    [ComImport, Guid("00021401-0000-0000-C000-000000000046")]
+    class ShellLinkObject { }
+}
+'@
+    }
+
+    try {
+        [AumidSetter]::SetAumid($shortcutPath, $aumid)
+    } catch {
+        Write-Output "AUMID registration failed: $($_.Exception.Message) (toast will show 'Windows PowerShell' as source)"
+    }
+
+    # --- Build and show the toast ---
     $iconXml   = if ($ToastIcon -and (Test-Path $ToastIcon)) {
-        $iconUri = ($ToastIcon -replace '\\', '/') -replace '^\w:', 'file:///$0'
         "            <image src=`"$($ToastIcon -replace '\\', '/')`" placement=`"appLogoOverride`" hint-crop=`"circle`"/>"
     }
     $bannerXml = if ($ToastBanner -and (Test-Path $ToastBanner)) {
         "            <image src=`"$($ToastBanner -replace '\\', '/')`" placement=`"hero`"/>"
     }
 
+    # The toast script runs in the user's session (via scheduled task)
     $toastScript = @"
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
 [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
-`$appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+`$appId = '$aumid'
 `$xml = @'
 <toast scenario="reminder">
     <visual>
