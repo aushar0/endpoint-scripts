@@ -379,6 +379,79 @@ if ($currentFirmwareVersion -and ([version]$currentFirmwareVersion -lt [version]
 }
 
 # =============================================================================
+# ROOT-CAUSE LOOKUP (conditional: only when problems are found)
+# =============================================================================
+# When a camera-stack device reports a nonzero problem code, search the Windows
+# driver-install history log for the NTSTATUS code that explains why. This is
+# the "why is it code 10" answer: 0xC00000E5 = power failure, 0xC0000094 =
+# driver error, 0x800F0203 = no driver found, etc.
+#
+# This section only runs on machines with detected problems, so healthy
+# machines pay zero cost. The setupapi log can be large; the search is
+# filtered to the failing component's identifiers and limited to recent
+# entries.
+
+$problemCodeMeanings = @{
+    1  = 'configuration error';      10 = 'device cannot start'
+    12 = 'insufficient resources';   14 = 'needs restart'
+    16 = 'duplicate device';         18 = 'driver needs reinstalling'
+    21 = 'removing device';          22 = 'disabled (deliberate)'
+    24 = 'device not present';       28 = 'drivers not installed'
+    31 = 'driver load failure';      37 = 'driver verification failed'
+    39 = 'driver invalid';           43 = 'device reported problems'
+    45 = 'device not connected';     52 = 'driver unsigned or corrupt'
+}
+
+if ($activeDeviceProblems.Count -gt 0) {
+    $detailOutputLines += ''
+    $detailOutputLines += '--- root cause (from Windows driver-install history) ---'
+
+    # Translate each finding's problem code to a readable cause.
+    foreach ($finding in $activeDeviceProblems) {
+        $componentName = ($finding -split ' code ')[0]
+        $problemCode   = ($finding -split ' code ')[-1]
+        $meaning = if ($problemCodeMeanings[[int]$problemCode]) { $problemCodeMeanings[[int]$problemCode] } else { 'unknown' }
+        $detailOutputLines += "  $componentName : code $problemCode ($meaning)"
+    }
+
+    # Search setupapi.dev.log for NTSTATUS codes related to the failing
+    # camera components. The NTSTATUS tells the deeper "why" beyond the
+    # problem-code label (e.g., power failure vs driver install failure).
+    $cameraInfPattern = 'iacamera|hm1092|ov08x40|ov05c10|iactrllogic|iaisp|usbbridge|Vision\.inf'
+    $setupapiFindings = @(Select-String -Path 'C:\Windows\INF\setupapi.dev.log' `
+        -Pattern $cameraInfPattern -ErrorAction SilentlyContinue |
+        Where-Object { $_.Line -match '0x[0-9a-fA-F]{8}|status|error|fail' } |
+        Select-Object -Last 8)
+
+    if ($setupapiFindings.Count -gt 0) {
+        $detailOutputLines += '  NTSTATUS codes from setupapi.dev.log (most recent):'
+        foreach ($line in $setupapiFindings) {
+            # Compact: just the line number and the relevant text, truncated
+            $lineText = $line.Line.Trim()
+            if ($lineText.Length -gt 120) { $lineText = $lineText.Substring(0, 120) + '...' }
+            $detailOutputLines += "    line $($line.LineNumber): $lineText"
+        }
+    } else {
+        # Also check setupapi.app.log (some install events land there)
+        $setupapiAppFindings = @(Select-String -Path 'C:\Windows\INF\setupapi.app.log' `
+            -Pattern $cameraInfPattern -ErrorAction SilentlyContinue |
+            Where-Object { $_.Line -match '0x[0-9a-fA-F]{8}|status|error|fail' } |
+            Select-Object -Last 5)
+
+        if ($setupapiAppFindings.Count -gt 0) {
+            $detailOutputLines += '  NTSTATUS codes from setupapi.app.log (most recent):'
+            foreach ($line in $setupapiAppFindings) {
+                $lineText = $line.Line.Trim()
+                if ($lineText.Length -gt 120) { $lineText = $lineText.Substring(0, 120) + '...' }
+                $detailOutputLines += "    line $($line.LineNumber): $lineText"
+            }
+        } else {
+            $detailOutputLines += '  (no NTSTATUS entries found in setupapi logs for camera components)'
+        }
+    }
+}
+
+# =============================================================================
 # OUTPUT
 # =============================================================================
 # The headline goes first because the Intune portal's detection-output column
