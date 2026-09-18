@@ -61,15 +61,18 @@ so version bumps are just a file swap.
 
 ### [camera-stack-dell-pro](camera-stack-dell-pro/)
 
-Repair for the Intel camera stack on Dell Pro laptops — the components that
-Windows feature updates quietly break. One read-only check names the failing
-component and the reason; remediation waits for the camera to be idle, fixes
-the stack without a single prompt or forced reboot, and cleans up the driver
-residue the update left behind.
+Repair for the Intel camera stack on Dell Pro laptops — the ISP wedge that
+makes cameras vanish from Device Manager after a power-state transition.
+Detection is read-only (~2 seconds), exits 1 on broken cameras regardless
+of driver version, and outputs a single dense line for the Intune
+Remediations column. Remediation runs the Dell installer silently with
+camera and microphone idle detection, optional toast notification with
+branded banner and icon, and never forces a restart. PSADT toolkit included
+for SCCM/Win32 deployment.
 
-*Start with the [case study](camera-stack-dell-pro/README.md#case-study-camera-dead-after-a-windows-feature-update):
-a camera that died 11 hours after a feature update, diagnosed from PnP state
-Event Viewer can't even see.*
+*Start with the [case study](camera-stack-dell-pro/docs/installer-analysis.md):
+how the Dell package was reverse-engineered, why the ISP wedges, and why
+a missing camera leaves no trace in Event Viewer.*
 
 ### [cloudpc-autopilot-group-audit](cloudpc-autopilot-group-audit/)
 

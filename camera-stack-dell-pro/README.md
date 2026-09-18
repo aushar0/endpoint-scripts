@@ -8,16 +8,15 @@
 *"Camera can't start." "We can't find your camera." "Teams doesn't see my camera."*
 
 On Dell Pro laptops, the Intel MIPI camera stack breaks in ways a version check
-can't see: Windows feature updates rebind devices to inbox drivers, leave
-mixed-generation driver stacks behind, or strand firmware half-updated — and
-once the camera device is gone, **Event Viewer records nothing at all**. The
-only reliable evidence lives in PnP state, and by the time a ticket arrives,
-nobody knows which layer failed.
+can't see: the Intel ISP (Image Signal Processor) wedges during a power-state
+transition, causing the camera device to stop enumerating entirely. The camera
+disappears from Device Manager, Teams reports no camera found, and Event Viewer
+shows nothing at all once the device is gone.
 
-This kit detects and repairs that stack. Detection is read-only and safe to
-run at any time, including during video calls. Installation waits for the
-camera to be idle, never prompts the user, never closes applications, and
-never forces a restart.
+This kit detects and repairs that stack. Detection is read-only, runs in ~2
+seconds, and is safe at any time including during video calls. Remediation runs
+the Dell driver installer silently, waits for an idle camera and microphone,
+and never forces a restart.
 
 ## Quick start
 
@@ -26,171 +25,138 @@ never forces a restart.
 powershell -File .\detection\detect.ps1
 ```
 
+## Detection exit codes
+
+The Intune Remediations detection script (`intune-detection.ps1`) uses a
+simple two-way exit code driven by **camera health**, not driver versions:
+
 | Exit | Meaning | Action |
 |---|---|---|
-| 0 | healthy + current | leave alone |
-| 1 | needs update | routine — next maintenance window |
-| 2 | camera problem, drivers current | **not** this driver — dependency route (KB 000248760) |
-| 3 | needs update AND broken | prime candidate — remediate now |
+| 0 | Camera healthy (or machine not a Dell Pro) | Leave alone |
+| 1 | Camera broken — device problem codes, missing camera, or both | Remediate |
+
+Driver version information, firmware state, dependency versions, and upgrade
+correlation appear in the output as **context only** — they do not affect the
+exit code. This matches the operational need: find machines whose cameras
+don't work, not machines whose drivers are theoretically old.
 
 ## What's in the box
 
 | Path | Purpose |
 |---|---|
-| `detection/detect.ps1` | Standalone health check. Classifies the machine (see below) and returns a verdict as an exit code. Run it on any machine, any time. |
-| `detection/intune-detection.ps1` | Detection script for an Intune Remediations package. Exits `1` only when remediation can help; surfaces other findings as text in the detection-output column. |
-| `detection/intune-remediation.ps1` | Remediation script for the same package: downloads, verifies, extracts, waits for an idle camera, installs, cleans up. Fits the 60-minute remediation budget. |
-| `deployment/install.ps1` | Standalone installer for Intune Win32 apps or manual (admin console) runs. Same behavior, longer wait window. |
-| `deployment/app-detection-rule.ps1` | Detection rule script for the Intune Win32 app ("is the driver at target version?"). |
-| `deployment/psadt-toolkit/` | A complete, unmodified PSAppDeployToolkit 3.10.2 with the install wrapper already in place as `Deploy-Application.ps1`. Add the driver files (below), wrap, deploy. |
+| `detection/detect.ps1` | Standalone diagnostic with full verbose output. Run manually on any machine. |
+| `detection/intune-detection.ps1` | Intune Remediations detection. Single-line output, camera-health exit code. |
+| `detection/intune-remediation.ps1` | Intune Remediations remediation. Downloads, verifies, and runs the Dell installer silently. |
+| `deployment/psadt-toolkit/` | Complete PSAppDeployToolkit 3.10.2 for SCCM or Win32 app deployment. |
 
-## ✨ What this kit does
+## Detection output format
 
-| Capability | How |
-|---|---|
-| **Detect** | Reads live PnP state: device problem codes, driver versions vs. target, firmware payload level, missing cameras, Frame Server errors — never event logs for the missing-device class (proven invisible). |
-| **Classify** | A four-way verdict that separates *driver-outdated* from *camera-broken* from *disabled-by-choice* — because they have different fixes. |
-| **Remediate** | Installs only when the camera is idle (consent-store streaming check), never prompts, never kills processes, never forces reboots. Restarts ride the user's own reboot; the old driver keeps the camera working until then. |
-| **Clean up** | After binding, removes superseded driver packages from the store — the residue Windows feature updates leave behind and Dell's KB 000248760 blames for these tickets. |
-| **Explain** | Dual-surface logging: a readable narrative log alongside machine-readable `key=value` lines, plus a per-machine JSON snapshot with pre/post diff. |
+A single dense line (under 2,048 characters — the Intune Remediations limit),
+designed so every field is a commonality data point for fleet-wide analysis:
 
-## Case study: camera dead after a Windows feature update
-
-Example detector run on an affected machine (output abridged):
-
-```text
-TARGET: P[AB]14250 matched in SMBIOS field [SysProduct.Version]
-UPGRADE-CONTEXT: build 26200, last OS change 2026-08-14, Windows.old: False, recent-upgrade: True
-
-iacamera64-PB-LNL  status=Error  installed=70.26100.2.20000  target=70.26100.2.21770  OLD
-ov08x40-PB         status=Error  installed=NONE              target=70.26100.2.21770  OLD
-ov08x40-PB: Intel hardware on inbox driver (usbvideo.inf / Microsoft) - stack misbound (typical after OS upgrade)
-CAMERA: Integrated Webcam [Error] problem=10
-CAMERA: FrameServer error/warning events (7d): 12
-HW9TN|rca|first_err=2026-08-15T09:12|upgraded=2026-08-14T22:40|delta=+11h
-CORRELATION: camera broken + recent OS feature-update activity - consistent with 23H2->25H2 upgrade casualty
-
-NEEDS-UPDATE: True   CAMERA-BROKEN: True
-VERDICT: NEEDS+BROKEN - prime candidate: remediate with the camera package now (exit 3)
+```
+CAMERA_BROKEN(5):iaisp64,iacamera64,hm1092,Integrated Webcam,Himax|iaisp64=10(device_cannot_start) iacamera64=10(device_cannot_start)|drv:current|dep:ish=5.8.52,serialio=30.100.2524,me=2546.9.2|fw:133.152.66.0|bld:26200|upg:2026-08-14|ntstatus:0xC00000E5
 ```
 
-What the kit established, and what it did next:
+Fields (pipe-delimited):
 
-- **Named the missing component and why it matters.** The OmniVision sensor has
-  *no* driver bound (`NONE`), and the camera controller sits on the generic
-  Windows inbox driver instead of the Intel stack — the fingerprint of a
-  feature update rebinding the camera mid-upgrade. The ticket says "camera
-  doesn't work"; this says which of fourteen stack components is missing and
-  what put it there.
-- **Turned the ticket into a timeline.** The first camera failure in retained
-  logs landed 11 hours after the feature update committed — the `rca` line
-  that converts anecdotes into a measurable correlation across a fleet.
-- **Waited for the user instead of interrupting them.** Remediation polled
-  the camera consent store, found the user in a Teams call, and waited — no
-  prompt, no killed session, no forced reboot. It installed during the first
-  idle window.
-- **Cleaned up the cause, not just the symptom.** After binding the new
-  packages, the cleanup step removed the superseded driver packages the
-  upgrade had left behind — the exact multi-generation residue Dell's KB
-  identifies as the root cause. Exit `3010`: the stack finishes at the user's
-  next restart, with the previous driver keeping a working camera until then.
+| Field | What it tells you |
+|---|---|
+| `CAMERA_BROKEN(n):names` | Verdict + which components are failing |
+| `component=code(meaning)` | Per-device problem code with readable cause |
+| `ntstatus:0x...` | NTSTATUS from setupapi logs (the deeper "why") |
+| `drv:current` or `drv:N_old` | Driver currency (context, not the trigger) |
+| `dep:ish=version,serialio=version,me=version` | Dependency versions (KB 000248760 route) |
+| `fw:version` | Synaptics bridge firmware proxy |
+| `bld:number` | Windows build |
+| `upg:date` | Last feature-update date |
+| `err:date(+hours)` | First Frame Server error (when present) |
 
-Contrast with the alternative: a user files "we can't find your camera," and
-Event Viewer shows nothing at all once the device is gone (verified by
-controlled experiment — see Testing summary). Without PnP-level detection,
-the only diagnostic path is a live machine and a technician.
+Healthy machine: `CAMERA_OK|drv:current|dep:ish=5.8.52,...|fw:133.152.66.0|bld:26200|upg:2026-09-01`
 
-## How detection classifies a machine
+## How detection works
 
-Two independent questions — **is the driver stack current?** and **is the
-camera healthy?** — produce one verdict:
+1. **Hardware gate.** SMBIOS model check for PB14250/PA14250. Everything
+   else exits silently.
+2. **Device inventory.** `Win32_PnPEntity` (reliable, ~0.1s) for hardware
+   IDs, problem codes, device class, and name.
+3. **Driver binding.** `Win32_PnPSignedDriver` for installed versions,
+   with per-device `Get-PnpDeviceProperty` fallback when the cached class
+   returns incomplete data.
+4. **Health evaluation.** Problem codes (10 = cannot start, 14 = needs
+   restart, 28 = no driver, 43 = device reported problems). Camera-class
+   device count. Disabled devices (code 22) are reported separately and
+   never treated as a fault.
+5. **Root cause lookup.** When problems are found, the Windows setupapi
+   driver-install history is searched for NTSTATUS codes (0xC00000E5 =
+   power failure, 0xC0000094 = driver error, etc.).
+6. **Output.** Single line, verdict first, context and causes after.
 
-| | Camera healthy | Camera broken |
-|---|---|---|
-| **Driver below target** | `1` — routine update | `3` — update should fix it; prioritize |
-| **Driver current** | `0` — nothing to do | `2` — a dependency is missing, not this driver |
+Frame Server error events (7-day window) appear as diagnostic context but
+are **excluded from the exit code** — they are a lagging indicator that
+persists for up to 7 days after a camera has been fixed, causing false
+positives on remediated machines.
 
-- "Below target" includes a driver bound to a Microsoft inbox driver
-  (`usbvideo.inf`) instead of the Intel stack — the signature of a feature
-  update rebinding the camera.
-- Firmware is checked through a registry proxy: `CurrentFWVersion` carries the
-  Synaptics vision-extension INF version, where `>= 133.152.66.0` corresponds
-  to firmware family `>= 8.5.98.42` (the level both current packages ship).
-  `TargetVersion`/`UpdateVersion` are always `0.0.0.0` and are not signals.
-- A device disabled on purpose (problem code 22) is reported separately and
-  never treated as a fault — a driver update does not enable a disabled device.
-- Exit `2` points at the dependency route in
-  [Dell KB 000248760](https://www.dell.com/support/kbdoc/en-us/000248760/laptop-mipi-camera-may-not-work-under-windows):
-  enable the camera in BIOS, then update chipset, graphics, ISH, Serial I/O,
-  and ME. The detector prints the installed versions of those dependencies so
-  the gap is visible immediately.
+## How remediation works
 
-## How installation behaves
+The remediation script runs only when detection exits 1 (camera broken).
+It uses the Dell Update Package installer directly — the same method that
+has fixed 100+ ticket machines:
 
-1. **Waits for an idle camera.** The installer polls the Windows camera
-   consent store (`LastUsedTimeStop = 0` means an app is streaming). A laptop
-   on a call waits; a locked-but-on-a-call laptop also waits; tray-idle Teams
-   does not.
-2. **Installs via standard PnP** (`pnputil /add-driver /install`) and triggers
-   re-enumeration, so most machines finish live with no restart.
-3. **Cleans the driver store.** Superseded camera-family packages are deleted
-   once no device uses them (version-guarded; the active driver is never
-   eligible). This removes the multi-generation residue that feature updates
-   leave behind — the condition Dell's KB identifies as the root cause of
-   these camera failures.
-4. **Leaves restarts to the user.** If a device needs a restart to finish,
-   the installer exits `3010` (success + pending). The old driver keeps the
-   camera working until the user reboots whenever they choose. Nothing is
-   ever forced.
+1. **Camera and microphone idle check.** Polls the Windows consent store
+   (`LastUsedTimeStop = 0` means an app is streaming). Catches Teams,
+   Zoom, WebEx, Chrome, Edge, Discord, and anything else. Audio-only calls
+   are detected via the microphone consent store.
+2. **Package download.** Fallback chain: HttpClient → Invoke-WebRequest →
+   BITS. Verified: Authenticode signature from Dell + SHA-256 when published.
+   Cached in `C:\ProgramData\DellCamera\` after first download.
+3. **Dell silent install.** Runs the package EXE with `/s` (the proven
+   method). The installer handles driver staging, binding, and cleanup
+   internally. No extraction, no pnputil, no manual driver-store management.
+4. **Device rescan.** `pnputil /scan-devices` triggers re-enumeration of
+   any devices that can recover without a restart.
+5. **Verification.** Checks whether the camera is now present and healthy.
+   Captures `setupapi_camera_slice.log` as forensic evidence if problems
+   persist.
+6. **Toast notification** (optional, `-ShowToast`). Windows toast with
+   customizable banner image, circular icon, title, and message. Shows via
+   a scheduled task in the user's session (required because Intune/Nexthink
+   runs as SYSTEM).
 
-Installer exit codes: `0` success · `3010` success, restart pending ·
-`1618` camera busy past the wait window (Intune fast-retry).
+Exit codes: `0` success · `3010` success, restart pending (the reboot
+belongs to the user; never forced) · `1` download or install failed.
+
+## The root cause (from fleet evidence)
+
+The Intel ISP (`PCI\VEN_8086&DEV_7D19`) freezes during a power-state
+transition (`0xC00000E5 STATUS_DEVICE_POWER_FAILURE`). When the ISP wedges,
+the downstream camera device stops enumerating — it disappears from Device
+Manager entirely. Teams and the Windows Camera app report "no camera found."
+
+The fix requires two things: the driver package staged (so it binds when
+the device re-enumerates) and a reboot (which power-cycles the wedged ISP).
+The Dell installer + reboot has fixed 100% of reported cases.
+
+Machines with outdated drivers but working cameras are **not** flagged by
+this detection — version currency is informational context, not the trigger.
 
 ## Deploying
 
 ### Intune Remediations (recommended)
 
-1. Create a Remediations package with `detection/intune-detection.ps1` and
-   `detection/intune-remediation.ps1`, running as SYSTEM.
-2. Schedule daily (local time; missed runs execute when the device is next
-   online). Use a weekly cadence for non-urgent sweeps.
-3. The daily schedule is also the retry mechanism: a machine whose camera
-   stayed busy simply gets the next day's run.
+1. Create a Remediations package:
+   - Detection script: `detection/intune-detection.ps1`
+   - Remediation script: `detection/intune-remediation.ps1`
+   - Run as SYSTEM
+2. Schedule daily. Detection runs in ~2 seconds (read-only). Remediation
+   only fires on detection exit 1 and is idempotent on re-runs.
+3. Optional toast: add `-ShowToast` to the remediation script parameters.
+   Add `-ToastBanner <path>` and `-ToastIcon <path>` for branded images.
 
-### Intune Win32 app
+### SCCM / Intune Win32
 
-The `psadt-toolkit` folder follows the standard PSADT layout: `AppDeployToolkit\`
-is the engine, `Files\` is the payload, and `Deploy-Application.exe` is the
-entry point. (The official release zip wraps these in an extra `Toolkit\`
-folder; this repository flattens that away.)
-
-From the `deployment/psadt-toolkit/` folder:
-
-1. Copy the extracted Dell driver tree into `Files\Drivers\`.
-2. Create the Intune package with the
-   [Microsoft Win32 Content Prep Tool](https://github.com/microsoft/microsoft-win32-content-prep-tool):
-   ```bat
-   IntuneWinAppUtil.exe -c . -s Deploy-Application.exe -o .
-   ```
-   (Note: the tool rejects a `.\` prefix on the setup file — the command
-   above is executed and verified as written.)
-   This produces `Deploy-Application.intunewin` in the current folder — the
-   single-file format an Intune Win32 app requires
-   ([preparation documentation](https://learn.microsoft.com/en-us/intune/app-management/deployment/create-win32-package)).
-3. App settings:
-   - Install command: `Deploy-Application.exe -DeploymentType Install -DeployMode Silent`
-   - Detection rule: script `deployment/app-detection-rule.ps1`
-   - Installation time required: **1440** (the maximum) — the wrapper waits
-     up to 1380 minutes for an idle camera, so delivery and patience happen
-     in a single run
-   - Return codes: `0` / `3010` success; restart behavior **Nothing**;
-     `1618` fast-retry
-4. Assign as Required to a dynamic device group scoped to the hardware model.
-
-### SCCM
-
-Use the same toolkit folder as a package. The wrapper runs on PSADT 3.10.x
-and v4 (all functions it calls have v4 compatibility wrappers).
+Use the `deployment/psadt-toolkit/` folder with the full PSAppDeployToolkit.
+See the [PSADT documentation](https://psappdeploytoolkit.com) for packaging.
 
 ## Driver packages
 
@@ -198,70 +164,12 @@ and v4 (all functions it calls have v4 compatibility wrappers).
 |---|---|---|---|
 | Dell Pro 14 **Plus** (PB14250) | HW9TN | A13 (80.26100.0.29) | [direct link](https://dl.dell.com/FOLDER14812487M/1/Intel-2D-Imaging-USB-IO-Vision-Driver-for-Camera_HW9TN_WIN64_80.26100.0.29_A13.EXE) · [driver page](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=hw9tn) |
 
-Additional Dell Pro models follow the same package pattern — extending the kit
-means adding the package's version table to the detection scripts.
-
 Driver binaries are not redistributed in this repository. Downloads are
-verified before use: the Authenticode signer must be Dell, plus SHA-256 when a
-hash is published.
-For air-gapped or test machines, `intune-remediation.ps1 -LocalPackage <path>`
-uses a local copy of the package instead of downloading.
-
-## Logs
-
-Everything a run observes and does is recorded in four places:
-
-| Location | What it is |
-|---|---|
-| `C:\Windows\Logs\Software\...CameraStack...log` | The deployment log (PSADT) — a plain-English narrative, with problem codes translated to text |
-| `C:\Windows\Logs\Software\<app>-<version>-<DeploymentType>\machine.log` | Machine-readable event lines (`key=value`), built for grep and fleet-wide analysis; the folder follows the per-package log convention |
-| `C:\Windows\Logs\Software\<app>-<version>-<DeploymentType>\run-<timestamp>.json` | One structured record per run (newest 20 kept): device inventories before and after, actions, timings, errors, exit code. `last_run.json` always mirrors the newest record as a stable path for tooling. |
-| stdout | The same machine lines, captured by Intune / Remediations reporting |
-
-Every run closes with a DEPLOYMENT SUMMARY block in the PSADT log stating
-the outcome and naming the run record it wrote.
-
-The driver-package download and extraction cache stays separate, under
-`C:\ProgramData\DellCamera\<package>\v<version>\` — it is cache, not
-evidence, and can be large.
-
-This kit installs driver INF packages and has no MSI or InstallShield
-components, so its evidence folder carries the run records, the event
-stream, and the captured setupapi history. Kits that wrap MSI or
-InstallShield installers add their logs and response files to the same
-folder.
-
-When the post-install check finds problems, a `setupapi_camera_slice.log`
-(Windows driver-install history, filtered to the camera INFs) is captured
-automatically — the forensic record of what the OS did to the camera stack.
-
-## Testing summary
-
-Every capability claim above is anchored to a run: healthy-camera and
-missing-camera branches executed on live hardware, the package boot-tested
-via the public-artifact path, and the log-invisibility finding established by
-controlled experiment.
-
-- **Package boot test (VM):** the toolkit + wrapper, assembled from this
-  repository and run silently, initializes cleanly and exits through the
-  hardware gate. Three packaging defects were found and fixed by this test.
-- **Live hardware:** model gating, version tables, problem codes, idle-camera
-  detection, firmware registry layout, and the failure-history baseline all
-  verified on target silicon.
-- **Missing-camera experiment (controlled):** a camera removed while in use
-  generates vetoed-removal warnings (Kernel-PnP event 1000) and **no
-  events at all** afterward — establishing that a missing camera is only
-  detectable through device enumeration, which is what the detector reads.
-
-## 🧰 Requirements
-
-- Windows 11 (build 26100+), PowerShell 5.1+
-- Detection: any context (read-only). Installation: admin/SYSTEM.
-- Driver payload from Dell's site (never committed to this repository)
+verified before use: the Authenticcode signer must be Dell, plus SHA-256
+when a hash is published. For air-gapped machines, pass `-LocalPackage <path>`.
 
 ## References
 
 - [Dell KB 000248760 — MIPI camera may not work under Windows](https://www.dell.com/support/kbdoc/en-us/000248760/laptop-mipi-camera-may-not-work-under-windows)
-- [PSAppDeployToolkit](https://psappdeploytoolkit.com) (bundled under LGPL-3.0)
-- Dell driver page: [HW9TN](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=hw9tn)
 - [How the packages were analyzed](docs/installer-analysis.md) — the full decomposition case study
+- [PSAppDeployToolkit](https://psappdeploytoolkit.com) (bundled under LGPL-3.0)
