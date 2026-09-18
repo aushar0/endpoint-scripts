@@ -13,9 +13,11 @@ fleets that keep remote-assistance clients off endpoints by default.
 
 **Status:** lab battery FULL PASS 2026-09-13 (install x2, repair, uninstall
 x2, SYSTEM context — all exit 0, zero uninstall residue; detection
-true-positive x3, true-negative x4). Not lab-testable: tenant
-authentication, licensing, and session behavior. See
-[Test ledger](#test-ledger).
+true-positive x3, true-negative x4). v1.1.0 (2026-09-18): two-lane
+installer acquire — download-lane live probe plus a 6-check acquire
+harness, all green (no install executed in that pass; see
+[Test ledger](#test-ledger)). Not lab-testable: tenant authentication,
+licensing, and session behavior.
 
 ## Contents
 
@@ -35,9 +37,12 @@ from Microsoft at package time — see below.
   route). This wrapper is the `Deploy-Application.ps1` that sits at the
   toolkit root.
 - `remotehelpinstaller.exe` from <https://aka.ms/downloadremotehelp>
-  (public, evergreen). Placed in the package's `Files\` folder — the
-  filename is coupled to the vendor-documented commands and must not
-  change.
+  (public, evergreen) — **either staged in the package's `Files\` folder
+  (offline-deterministic) or omitted entirely**: the download lane fetches
+  it from the same link at deploy time. The filename is coupled to the
+  vendor-documented commands and must not change.
+- Outbound HTTPS to `aka.ms` at deploy time, unless you stage the
+  installer (see acquire lanes below).
 - WebView2 Runtime — bundled by the installer when missing (and left
   behind on uninstall, by design).
 
@@ -47,12 +52,12 @@ from Microsoft at package time — see below.
 <toolkit root>\
     Deploy-Application.ps1        <- this wrapper
     AppDeployToolkit\             <- stock PSADT 3.10.x
-    Files\
-        remotehelpinstaller.exe   <- from aka.ms/downloadremotehelp
+    Files\                        <- OPTIONAL since v1.1.0
+        remotehelpinstaller.exe   <- staged fallback copy (from aka.ms); may be omitted
 ```
 
-Before shipping, verify the download against the pin in the wrapper and
-update it if the evergreen link served a newer build:
+If you stage the installer, verify the download against the pin in the
+wrapper and update it if the evergreen link served a newer build:
 
 ```powershell
 (Get-FileHash .\Files\remotehelpinstaller.exe -Algorithm SHA256).Hash
@@ -62,6 +67,26 @@ update it if the evergreen link served a newer build:
 
 The wrapper derives app version from the EXE at runtime; a version bump is
 "swap the file, update the pin", nothing else to edit.
+
+## Installer acquire — two lanes, two gates (v1.1.0)
+
+`$acquireStance` in the wrapper picks the lane order:
+
+- **`download-first` (default)** — fetch the current build from
+  <https://aka.ms/downloadremotehelp> at deploy time with the OS-inbox
+  `curl.exe`. The gate is the **Authenticode signature** (status Valid and
+  signer Microsoft Corporation), because the link rotates and a hash
+  cannot pre-pin a rotating target. On any failure (network, proxy,
+  signature) it falls back to the staged copy.
+- **`local-first`** — the staged `Files\` copy wins (gate = SHA-256 pin);
+  download only when nothing is staged.
+- **`local-only`** — never touches the network (air-gapped fleets).
+
+Both lanes dead → exit **60005** (distinct from 60001 for triage), reason
+in the PSADT log. The `RH_SUMMARY` digest line records which lane every
+install used (`lane=download|local|local-fallback|download-fallback`).
+Live-probed 2026-09-18: the link still served the pinned 5.2.1040.0 build
+byte-identically, so both lanes currently converge on the same binary.
 
 ## ConfigMgr application shape
 
@@ -122,8 +147,9 @@ after install.
 
 ## What the wrapper adds over the raw commands
 
-- Payload SHA-256 pin (`$expectedSha256`) — installs fail closed on a
-  wrong/tampered binary; re-pin only a known-good download.
+- Two-lane installer acquire with per-lane gates (see above) — always
+  installs the publisher's current build without package maintenance, or
+  a pinned staged copy when the network lane is unavailable.
 - Runtime identity: version derived from the EXE, zero edits on version
   swaps.
 - Post-install ground-truth check: Burn bootstrappers are an
@@ -133,7 +159,8 @@ after install.
   grace-poll for the async Burn stub; WebView2 survival is logged, not
   chased.
 - `RH_SUMMARY` log line per phase: one greppable line with
-  deploymenttype / phase / version / exepresent / service / arp / result.
+  deploymenttype / phase / version / lane / exepresent / service / arp /
+  result.
 
 ## Attended vs unattended — different products
 
@@ -179,9 +206,9 @@ Help Desk Operator covers attended), optional Conditional Access via the
 2. Flag case sensitivity — `acceptTerms` / `enableAutoUpdates` must be
    exact.
 3. Filename coupling — must remain `remotehelpinstaller.exe`.
-4. Evergreen link vs pinned hash — bump `$expectedSha256` on every
-   version swap or installs fail closed (supply-chain gate; do not
-   blind-clear).
+4. Two gates, one per lane — the download lane trusts the publisher's
+   **signer** because the link rotates; the staged lane trusts the
+   SHA-256 pin. Never mix them. Re-pin only a known-good download.
 5. WebView2 residue after uninstall is by design.
 6. Version floor re-offers the app on every version bump if set too
    tight — existence-only on rollout 1.
@@ -191,6 +218,10 @@ Help Desk Operator covers attended), optional Conditional Access via the
    day 1.
 9. A later unattended requirement = new build (AVD agent pair), not a
    switch here.
+10. URL-filtered or proxied segments: a blocked download lane falls back
+    to the staged copy; with nothing staged the wrapper exits 60005 with
+    the reason in the log — expected on locked-down segments, not a
+    package bug.
 
 ## Test ledger
 
@@ -211,6 +242,15 @@ Help Desk Operator covers attended), optional Conditional Access via the
   true-negative x4. Environment label: lab VM, no EDR/WDAC, no tenant
   registration — install/uninstall/detection mechanics proven;
   app-auth/tenant behavior not testable in lab.
+- **DYN 2026-09-18, acquire lanes (workstation, live network, no install
+  executed):** download-lane probe against the evergreen link — 7,836,392
+  bytes, Authenticode Valid / CN=Microsoft Corporation, SHA-256 identical
+  to the staged pin, FileVersion 5.2.1040.0. Acquire-logic harness 6/6
+  (the harness AST-extracts the shipped functions from the wrapper, so it
+  executes this file's code, not a copy): download happy path, staged
+  happy path with pin verified, tampered staged copy rejected by the pin,
+  tampered download rejected by the signer gate and deleted, both lanes
+  dead returns null (the 60005 path).
 
 ## Sources
 

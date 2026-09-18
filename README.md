@@ -115,14 +115,16 @@ silent no-op.*
 ### [remote-help-sccm](remote-help-sccm/)
 
 Microsoft Remote Help (attended support client) as a ConfigMgr / Software
-Center application: PSADT 3.10.x wrapper around the silent vendor
-bootstrapper with a SHA-256 payload pin, a post-install ground-truth
+Center application: PSADT 3.10.x wrapper with two-lane installer acquire
+(publisher link at deploy time behind an Authenticode signer gate, with a
+SHA-256-pinned staged copy as fallback), a post-install ground-truth
 check (Burn bootstrappers exit 0 after failed applies), idempotent
 uninstall, and one detection script that serves both SCCM and Intune
 (32-bit-safe, optional version floor). Deployment shape defaults to
 Available so machines only carry the client once a user opts in. Lab
 battery: install x2 / repair / uninstall x2 / SYSTEM all exit 0, zero
-uninstall residue; detection true-positive x3 + true-negative x4.
+uninstall residue; detection true-positive x3 + true-negative x4;
+acquire lanes live-probed (6/6 harness checks).
 <!-- kit:remote-help-sccm:end -->
 
 ## Conventions

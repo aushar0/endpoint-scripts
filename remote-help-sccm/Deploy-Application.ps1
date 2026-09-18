@@ -24,8 +24,14 @@
     'disable' = append enableAutoUpdates=0 so Intune/SCCM redeploy owns
     versions instead. acceptTerms/enableAutoUpdates are CASE SENSITIVE.
 
-    $expectedSha256 pins the payload; update it when swapping the EXE, or
-    leave '' to skip verification.
+    Installer acquire is two-lane. $acquireStance 'download-first' (default)
+    fetches the current build from aka.ms at deploy time - the gate is the
+    Authenticode signature (signer must be Microsoft Corporation), because
+    the link rotates and a hash cannot pre-pin a rotating target - with
+    fallback to the staged copy in Files\remotehelpinstaller.exe, which the
+    $expectedSha256 pin guards instead. 'local-first' prefers the staged
+    copy; 'local-only' never touches the network. Exit 60005 = no installer
+    obtainable from any lane.
 
     No Show-InstallationWelcome: nothing to close (new app), and silent-mode
     Welcome still closes apps un-prompted - deliberately omitted.
@@ -61,17 +67,24 @@ Try {
     [string]$appArch          = 'x64'
     [string]$appLang          = 'EN'
     [string]$appRevision      = '01'
-    [string]$appScriptVersion = '1.0.0'
-    [string]$appScriptDate    = '2026-09-13'
+    [string]$appScriptVersion = '1.1.0'
+    [string]$appScriptDate    = '2026-09-18'
     [string]$appScriptAuthor  = 'endpoint engineering'
 
     ## Update stance: '' = app-managed self-update (default); 'disable' =
     ## enableAutoUpdates=0 (deploy pipeline owns versions).
     [string]$updateStance = ''
 
-    ## Payload pin - SHA-256 of remotehelpinstaller.exe. Update on version
-    ## swap; '' skips verification.
+    ## Payload pin - guards the STAGED COPY in Files\ only (the download lane
+    ## is gated by Authenticode signer instead, because aka.ms rotates).
+    ## Update on version swap; '' skips verification.
     [string]$expectedSha256 = '9464BE6A86CFF2DB3548A298C2ED9979BECC343CB3C55A920E95D86B91D8147B'
+
+    ## Acquire stance: 'download-first' (default) = fetch current build from
+    ## aka.ms now, staged copy as fallback; 'local-first' = staged copy now,
+    ## download only when absent; 'local-only' = never touch the network.
+    [string]$acquireStance = 'download-first'
+    [string]$rhDownloadUrl = 'https://aka.ms/downloadremotehelp'
 
     ## Vendor-documented silent switches (deploy.md). CASE SENSITIVE.
     [string]$rhInstallParams   = '/quiet acceptTerms=1'
@@ -103,28 +116,101 @@ Try {
     [string]$script:dirSupportFiles = Join-Path -Path $scriptDirectory -ChildPath 'SupportFiles'
 
     ##*===============================================
-    ##* EXE-DERIVED IDENTITY + PAYLOAD PIN (runtime - no edits on version swaps)
+    ##* INSTALLER ACQUIRE - two lanes, two gates (Lenovo Commercial Vantage
+    ##* lineage: download-at-deploy + optional staged fallback; the download lane
+    ##* gated by Authenticode signer because aka.ms rotates - a hash cannot
+    ##* pre-pin a rotating target; the staged copy is gated by the SHA-256 pin).
     ##*===============================================
-    [string]$script:rhInstaller = Join-Path -Path $script:dirFiles -ChildPath 'remotehelpinstaller.exe'
-    If (-not (Test-Path -LiteralPath $script:rhInstaller -PathType 'Leaf')) {
-        Throw "remotehelpinstaller.exe not found in [$script:dirFiles] - the vendor-documented commands are name-coupled; keep the exact filename."
-    }
-    If ((Get-Item -LiteralPath $script:rhInstaller).Length -eq 0) {
-        Throw "remotehelpinstaller.exe in [$script:dirFiles] is ZERO bytes - bad copy."
-    }
-    If ($expectedSha256) {
-        $actualHash = (Get-FileHash -Path $script:rhInstaller -Algorithm 'SHA256').Hash
-        If ($actualHash -ne $expectedSha256.ToUpper()) {
-            Throw "SHA-256 mismatch on remotehelpinstaller.exe (expected [$expectedSha256], got [$actualHash]) - wrong or tampered payload; update `$expectedSha256 only after re-pinning a known-good download."
+    [string]$script:rhLocalCopy = Join-Path -Path $script:dirFiles -ChildPath 'remotehelpinstaller.exe'
+    [string]$script:rhInstaller = $null
+    [string]$script:rhAcquireLane = 'none'
+
+    Function Get-RhDownloadedInstaller {
+        # Download lane: aka.ms -> TEMP; gates = file exists, non-zero,
+        # Authenticode Valid + signer Microsoft Corporation. Returns path or $null.
+        [string]$dlDir  = Join-Path -Path $env:TEMP -ChildPath 'RemoteHelpPackage'
+        [string]$dlPath = Join-Path -Path $dlDir -ChildPath 'remotehelpinstaller.exe'
+        Try {
+            New-Item -ItemType Directory -Force -Path $dlDir | Out-Null
+            Remove-Item -LiteralPath $dlPath -Force -ErrorAction SilentlyContinue
+            [string]$curlExe = Join-Path -Path $env:SystemRoot -ChildPath 'System32\curl.exe'
+            If (-not (Test-Path -LiteralPath $curlExe -PathType 'Leaf')) { Throw "curl.exe not found at [$curlExe] (inbox on Windows 10 1803+)." }
+            Write-Log -Message "Remote Help: download lane - fetching [$rhDownloadUrl] ..."
+            # -IgnoreExitCodes '*': curl's nonzero exits must NOT Exit-Script the
+            # deployment - the real gates are the file + signature checks below.
+            Execute-Process -Path $curlExe -Parameters "-L --fail --silent --show-error --connect-timeout 20 --max-time 300 -o `"$dlPath`" `"$rhDownloadUrl`"" -WindowStyle Hidden -IgnoreExitCodes '*'
+            If (-not (Test-Path -LiteralPath $dlPath -PathType 'Leaf')) { Throw 'download produced no file' }
+            If ((Get-Item -LiteralPath $dlPath).Length -eq 0) { Throw 'downloaded file is ZERO bytes' }
+            $sig = Get-AuthenticodeSignature -LiteralPath $dlPath
+            [string]$rhSigner = If ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } Else { '(no signer certificate)' }
+            If ($sig.Status -ne 'Valid' -or $rhSigner -notlike '*Microsoft Corporation*') {
+                Throw "Authenticode gate FAILED (status=$($sig.Status), signer=$rhSigner) - tampered or intercepted payload; not installing it."
+            }
+            Write-Log -Message "Remote Help: download lane OK - signer Microsoft Corporation, size=$((Get-Item -LiteralPath $dlPath).Length) bytes, path=[$dlPath]."
+            Return $dlPath
         }
-        Write-Log -Message "Remote Help: payload SHA-256 verified against pin."
+        Catch {
+            Write-Log -Message "Remote Help: download lane FAILED - $($_.Exception.Message)"
+            Remove-Item -LiteralPath $dlPath -Force -ErrorAction SilentlyContinue
+            Return $null
+        }
     }
-    Else {
-        Write-Log -Message 'Remote Help: $expectedSha256 empty - payload hash NOT verified.'
+
+    Function Get-RhLocalInstaller {
+        # Local lane: staged copy in Files\; gates = exists, non-zero, SHA-256 pin.
+        # The vendor-documented commands are name-coupled - keep the exact filename.
+        Try {
+            If (-not (Test-Path -LiteralPath $script:rhLocalCopy -PathType 'Leaf')) { Throw "no staged copy at [$script:rhLocalCopy] (Files\ lane unarmed - optional since the download lane exists)" }
+            If ((Get-Item -LiteralPath $script:rhLocalCopy).Length -eq 0) { Throw 'staged copy is ZERO bytes - bad copy' }
+            If ($expectedSha256) {
+                [string]$actualHash = (Get-FileHash -Path $script:rhLocalCopy -Algorithm 'SHA256').Hash
+                If ($actualHash -ne $expectedSha256.ToUpper()) {
+                    Throw "SHA-256 pin mismatch (expected [$expectedSha256], got [$actualHash]) - update `$expectedSha256 only after re-pinning a known-good download."
+                }
+            }
+            Else { Write-Log -Message 'Remote Help: $expectedSha256 empty - staged copy hash NOT verified.' }
+            Return $script:rhLocalCopy
+        }
+        Catch {
+            Write-Log -Message "Remote Help: local lane FAILED - $($_.Exception.Message)"
+            Return $null
+        }
     }
+
+    Switch ($acquireStance) {
+        'download-first' {
+            $script:rhInstaller = Get-RhDownloadedInstaller
+            If ($script:rhInstaller) { $script:rhAcquireLane = 'download' }
+            Else {
+                $script:rhInstaller = Get-RhLocalInstaller
+                If ($script:rhInstaller) { $script:rhAcquireLane = 'local-fallback' }
+            }
+        }
+        'local-first' {
+            $script:rhInstaller = Get-RhLocalInstaller
+            If ($script:rhInstaller) { $script:rhAcquireLane = 'local' }
+            Else {
+                $script:rhInstaller = Get-RhDownloadedInstaller
+                If ($script:rhInstaller) { $script:rhAcquireLane = 'download-fallback' }
+            }
+        }
+        'local-only' {
+            $script:rhInstaller = Get-RhLocalInstaller
+            If ($script:rhInstaller) { $script:rhAcquireLane = 'local' }
+        }
+    }
+    If (-not $script:rhInstaller) {
+        # 60005 = no installer obtainable: stance exhausted both lanes (or
+        # local-only with nothing staged). Distinct from 60001 for triage.
+        [int32]$mainExitCode = 60005
+        Write-Log -Message "Remote Help: NO installer obtainable (stance=$acquireStance) - exiting $mainExitCode."
+        Exit $mainExitCode
+    }
+    Write-Log -Message "Remote Help: installer acquired via [$script:rhAcquireLane] lane - [$script:rhInstaller]"
+
     $appVersion = (Get-Item -LiteralPath $script:rhInstaller).VersionInfo.FileVersion
     If ([string]::IsNullOrWhiteSpace($appVersion)) { $appVersion = 'unknown' }
-    Write-Log -Message "Remote Help package identity derived from EXE: FileVersion=$appVersion Path=$script:rhInstaller"
+    Write-Log -Message "Remote Help package identity derived from EXE: FileVersion=$appVersion Path=$script:rhInstaller Lane=$script:rhAcquireLane"
 
     ## Ground-truth anchor: the installed binary (not the exit code).
     [string]$script:rhInstalledExe = Join-Path -Path $env:ProgramFiles -ChildPath 'Remote Help\RemoteHelp.exe'
@@ -152,12 +238,12 @@ Try {
 
     ## Post-mortem digest: one greppable line per phase for triage.
     function Write-RhSummary ([string]$Result) {
-        Write-Log -Message ("RH_SUMMARY deploymenttype={0} mode={1} phase={2} user={3} computer={4} version={5} exepresent={6} service={7} arp={8} updatestance={9} result={10}" -f `
+        Write-Log -Message ("RH_SUMMARY deploymenttype={0} mode={1} phase={2} user={3} computer={4} version={5} exepresent={6} service={7} arp={8} updatestance={9} lane={10} result={11}" -f `
             $DeploymentType, $DeployMode, $script:installPhase, $env:USERNAME, $env:COMPUTERNAME, $appVersion,
             $(If (Test-Path -LiteralPath $script:rhInstalledExe) { 'present' } else { 'absent' }),
             (Get-RhServiceState), (Get-RhArpEntry),
             $(If ($updateStance -eq 'disable') { 'disable' } else { 'default' }),
-            $Result)
+            $script:rhAcquireLane, $Result)
     }
 }
 Catch {
