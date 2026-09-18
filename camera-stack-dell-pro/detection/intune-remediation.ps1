@@ -200,6 +200,7 @@ if (-not (Test-Path $packageFilePath)) {
         # Download via HttpClient (streamed, no BITS service dependency).
         # BITS requires the Windows BITS service to be running, which may be
         # disabled on locked-down machines. HttpClient works in any context.
+        Add-Type -AssemblyName System.Net.Http
         $httpClient = [System.Net.Http.HttpClient]::new()
         $httpClient.Timeout = [TimeSpan]::FromMinutes(10)
         $httpResponse = $httpClient.GetAsync($selectedPackage.DownloadUrl, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
