@@ -125,31 +125,121 @@ param(
 # This is the same mechanism as PSADT's Execute-ProcessAsUser.
 
 function Show-RestartToast {
-    # Shows a toast with a custom app name (not "Windows PowerShell").
-    # Requires a one-time AUMID registration: a Start Menu shortcut with the
-    # AppUserModel.ID property set. After registration, all toasts from this
-    # script show the custom app name. Uses PowerShell only (no VBScript).
+    # Shows a toast with optional icon and banner.
+    # Icon priority: -ToastIcon path → cached download → generated camera icon.
+    # Banner priority: -ToastBanner path → generated gradient banner.
+    # Images cached in C:\ProgramData\DellCamera\toast\ after first run.
+    # Source label shows "Windows PowerShell" (AUMID limitation, accepted).
 
     $effectiveTitle   = if ($ToastTitle)   { $ToastTitle }   else { 'Camera Driver Update' }
     $effectiveMessage = if ($ToastMessage) { $ToastMessage } else { 'Your camera driver has been installed. Please restart when convenient to finish.' }
 
-    # Use PowerShell built-in AUMID; shows "Windows PowerShell" as source.
-    # --- Build and show the toast ---
-    $iconXml   = if ($ToastIcon -and (Test-Path $ToastIcon)) {
-        "            <image src=`"$($ToastIcon -replace '\\', '/')`" placement=`"appLogoOverride`" hint-crop=`"circle`"/>"
-    }
-    $bannerXml = if ($ToastBanner -and (Test-Path $ToastBanner)) {
-        "            <image src=`"$($ToastBanner -replace '\\', '/')`" placement=`"hero`"/>"
+    $toastImageDir = Join-Path $env:ProgramData 'DellCamera\toast'
+    New-Item -ItemType Directory -Force -Path $toastImageDir | Out-Null
+    $cachedIconPath   = Join-Path $toastImageDir 'icon_48.png'
+    $cachedBannerPath = Join-Path $toastImageDir 'banner_364x180.png'
+
+    # --- Resolve icon ---
+    $resolvedIconPath = $null
+    if ($ToastIcon -and (Test-Path $ToastIcon)) {
+        $resolvedIconPath = $ToastIcon
+    } elseif (Test-Path $cachedIconPath) {
+        $resolvedIconPath = $cachedIconPath
+    } else {
+        Add-Type -AssemblyName System.Drawing
+        # Try org logo download
+        try {
+            $tempHiRes = Join-Path $toastImageDir 'logo_source.png'
+            Invoke-WebRequest -Uri 'https://logos-world.net/wp-content/uploads/2023/06/Gartner-Symbol.png' `
+                -OutFile $tempHiRes -UserAgent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' -UseBasicParsing -TimeoutSec 15
+            $srcImg = [System.Drawing.Image]::FromFile($tempHiRes)
+            $side = [Math]::Min($srcImg.Width, $srcImg.Height)
+            $x0 = [int](($srcImg.Width - $side) / 2); $y0 = [int](($srcImg.Height - $side) / 2)
+            $square = New-Object System.Drawing.Bitmap($side, $side)
+            $sg = [System.Drawing.Graphics]::FromImage($square)
+            $sg.DrawImage($srcImg, (New-Object System.Drawing.Rectangle(0, 0, $side, $side)), (New-Object System.Drawing.Rectangle($x0, $y0, $side, $side)), [System.Drawing.GraphicsUnit]::Pixel)
+            $sg.Dispose(); $srcImg.Dispose(); Remove-Item $tempHiRes -Force
+            $icon = New-Object System.Drawing.Bitmap(48, 48)
+            $g = [System.Drawing.Graphics]::FromImage($icon)
+            $g.InterpolationMode = 'HighQualityBicubic'
+            $g.Clear([System.Drawing.Color]::Transparent)
+            $g.DrawImage($square, 8, 8, 32, 32)
+            $g.Dispose(); $square.Dispose()
+            $icon.Save($cachedIconPath, [System.Drawing.Imaging.ImageFormat]::Png)
+            $resolvedIconPath = $cachedIconPath
+            Write-Output 'Toast icon: downloaded org logo, processed and cached.'
+        } catch {
+            Write-Output "Org logo download failed: $($_.Exception.Message)"
+        }
+        # Fallback: generate camera icon
+        if (-not (Test-Path $cachedIconPath)) {
+            try {
+                $icon = New-Object System.Drawing.Bitmap(48, 48)
+                $g = [System.Drawing.Graphics]::FromImage($icon)
+                $g.SmoothingMode = 'AntiAlias'
+                $g.Clear([System.Drawing.Color]::Transparent)
+                $g.FillEllipse((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0, 120, 215))), 2, 2, 44, 44)
+                $g.FillRectangle((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)), 12, 18, 24, 16)
+                $g.FillRectangle((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)), 20, 14, 8, 5)
+                $g.FillEllipse((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0, 120, 215))), 19, 21, 10, 10)
+                $g.Dispose()
+                $icon.Save($cachedIconPath, [System.Drawing.Imaging.ImageFormat]::Png)
+                $resolvedIconPath = $cachedIconPath
+                Write-Output 'Toast icon: generated camera fallback.'
+            } catch {
+                Write-Output "Icon generation failed: $($_.Exception.Message) — toast without icon."
+            }
+        }
     }
 
-    # The toast script runs in the user's session (via scheduled task)
+    # --- Resolve banner ---
+    $resolvedBannerPath = $null
+    if ($ToastBanner -and (Test-Path $ToastBanner)) {
+        $resolvedBannerPath = $ToastBanner
+    } elseif (Test-Path $cachedBannerPath) {
+        $resolvedBannerPath = $cachedBannerPath
+    } else {
+        try {
+            Add-Type -AssemblyName System.Drawing
+            $banner = New-Object System.Drawing.Bitmap(364, 180)
+            $bg = [System.Drawing.Graphics]::FromImage($banner)
+            $bg.SmoothingMode = 'AntiAlias'
+            $bg.TextRenderingHint = 'AntiAliasGridFit'
+            $rect = New-Object System.Drawing.Rectangle(0, 0, 364, 180)
+            $grad = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rect,
+                [System.Drawing.Color]::FromArgb(20, 40, 80),
+                [System.Drawing.Color]::FromArgb(50, 100, 180),
+                [System.Drawing.Drawing2D.LinearGradientMode]::Horizontal)
+            $bg.FillRectangle($grad, $rect)
+            $white = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+            $bg.DrawString('Gartner', (New-Object System.Drawing.Font('Segoe UI', 26, [System.Drawing.FontStyle]::Bold)), $white, 20, 25)
+            $bg.DrawString('Windows Endpoint Management', (New-Object System.Drawing.Font('Segoe UI', 11)), $white, 20, 70)
+            $bg.Dispose()
+            $banner.Save($cachedBannerPath, [System.Drawing.Imaging.ImageFormat]::Png)
+            $resolvedBannerPath = $cachedBannerPath
+            Write-Output 'Toast banner: generated and cached.'
+        } catch {
+            Write-Output "Banner generation failed: $($_.Exception.Message) — toast without banner."
+        }
+    }
+
+    # --- Build and show the toast ---
+    $iconXml   = if ($resolvedIconPath) {
+        "            <image src=`"file:///$($resolvedIconPath -replace '\\', '/')`" placement=`"appLogoOverride`" hint-crop=`"circle`"/>"
+    }
+    $bannerXml = if ($resolvedBannerPath) {
+        "            <image src=`"file:///$($resolvedBannerPath -replace '\\', '/')`" placement=`"hero`"/>"
+    }
+
+    $appAumid = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+
     $toastScript = @"
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
 [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
-`$appId = '$aumid'
+`$appId = '$appAumid'
 `$xml = @'
-<toast scenario="reminder">
+<toast scenario="reminder" duration="long">
     <visual>
         <binding template="ToastGeneric">
             <text>$effectiveTitle</text>
@@ -158,9 +248,6 @@ $iconXml
 $bannerXml
         </binding>
     </visual>
-    <actions>
-        <action content="OK" arguments="dismiss" activationType="system"/>
-    </actions>
 </toast>
 '@
 `$doc = New-Object Windows.Data.Xml.Dom.XmlDocument
