@@ -108,7 +108,7 @@ param(
     [switch]$ShowToast,
     [string]$ToastTitle    = '',   # optional: overrides default title
     [string]$ToastMessage  = '',   # optional: overrides default body
-    [string]$ToastIcon     = '',   # optional: path to icon PNG (48x48, shown circular)
+    [string]$ToastIcon     = '',   # optional: path to icon PNG (48x48 canvas with logo at 32x32 centered, 8px padding)
     [string]$ToastBanner   = ''    # optional: path to banner PNG (364x180, hero image)
 )
 
