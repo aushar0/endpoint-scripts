@@ -400,28 +400,26 @@ if ($activeDeviceProblems.Count -gt 0) {
 }
 
 # =============================================================================
-# OUTPUT (2-3 dense lines; designed for Intune's truncating column)
+# OUTPUT
 # =============================================================================
-# Every field is either a verdict signal or a commonality data point.
-# No headers, no blank lines, no repeated information.
+# Intune's detection-output column shows the LAST line of multi-line output,
+# so the verdict goes LAST (verified from live fleet results 2026-09-18).
+# Context and causes go first; verdict is the final, always-visible line.
 
-# --- Line 1: verdict + failing components + commonality context ---
-$verdictHeadline = if ($activeDeviceProblems.Count) {
-    $shortNames = ($activeDeviceProblems | ForEach-Object {
-        ($_ -split ' code ')[0] -replace '-PB-ARL','' -replace '-PB-LNL','' -replace '-PB',''
-    } | Select-Object -Unique) -join ','
-    "CAMERA_BROKEN($($activeDeviceProblems.Count)):$shortNames"
-} elseif ($deliberatelyDisabled.Count) {
-    'CAMERA_DISABLED'
-} else {
-    'CAMERA_OK'
+# --- Context line (always printed) ---
+$contextSegments = @()
+if ($outdatedComponents.Count) { $contextSegments += "drv:$($outdatedComponents.Count)_old" }
+elseif ($misboundComponents.Count) { $contextSegments += 'drv:misbound' }
+else { $contextSegments += 'drv:current' }
+$contextSegments += "dep:$(if ($dependencyLines) { $dependencyLines -join ',' } else { 'n/a' })"
+if ($firstFrameServerError) {
+    $contextSegments += "err:$($firstFrameServerError.TimeCreated.ToString('MM-dd'))(+${hoursBetweenUpgradeAndFirstError}h)"
 }
-if ($outdatedComponents.Count -or $misboundComponents.Count) { $verdictHeadline += "|drv_old" }
-$verdictHeadline += "|fw:$(if ($currentFirmwareVersion) { $currentFirmwareVersion } else { 'n/a' })"
-$verdictHeadline += "|bld:$($operatingSystem.BuildNumber)|upg:$($operatingSystem.InstallDate.ToString('yyyy-MM-dd'))"
-Write-Output $verdictHeadline
+$contextSegments += "fw:$(if ($currentFirmwareVersion) { $currentFirmwareVersion } else { 'n/a' })"
+$contextSegments += "bld:$($operatingSystem.BuildNumber)|upg:$($operatingSystem.InstallDate.ToString('yyyy-MM-dd'))"
+Write-Output ($contextSegments -join '|')
 
-# --- Line 2: per-component cause + NTSTATUS (broken machines only) ---
+# --- Causes line (broken machines only) ---
 if ($activeDeviceProblems.Count) {
     $causeSegments = @()
     $seenComponents = @{}
@@ -443,16 +441,18 @@ if ($activeDeviceProblems.Count) {
     Write-Output ($causeSegments -join ' ')
 }
 
-# --- Line 3: commonality data (driver currency, dependencies, first error) ---
-$contextSegments = @()
-if ($outdatedComponents.Count) { $contextSegments += "drv:$($outdatedComponents.Count)_old" }
-elseif ($misboundComponents.Count) { $contextSegments += 'drv:misbound' }
-else { $contextSegments += 'drv:current' }
-$contextSegments += "dep:$(if ($dependencyLines) { $dependencyLines -join ',' } else { 'n/a' })"
-if ($firstFrameServerError) {
-    $contextSegments += "first_err:$($firstFrameServerError.TimeCreated.ToString('MM-dd'))(+${hoursBetweenUpgradeAndFirstError}h)"
+# --- Verdict line (always printed, always LAST — this is what Intune shows) ---
+$verdictLine = if ($activeDeviceProblems.Count) {
+    $shortNames = ($activeDeviceProblems | ForEach-Object {
+        ($_ -split ' code ')[0] -replace '-PB-ARL','' -replace '-PB-LNL','' -replace '-PB',''
+    } | Select-Object -Unique) -join ','
+    "CAMERA_BROKEN($($activeDeviceProblems.Count)):$shortNames"
+} elseif ($deliberatelyDisabled.Count) {
+    'CAMERA_DISABLED'
+} else {
+    'CAMERA_OK'
 }
-if ($contextSegments.Count) { Write-Output ($contextSegments -join '|') }
+Write-Output $verdictLine
 
 # =============================================================================
 # EXIT CODE
