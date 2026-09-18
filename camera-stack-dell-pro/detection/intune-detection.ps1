@@ -7,22 +7,17 @@
     This script is the detection half of an Intune Remediations package. It
     runs read-only on a schedule and returns one of two exit codes:
 
-        Exit 0  The machine does not need remediation. This covers three cases:
-                drivers are current and the camera is healthy, the camera is
-                broken but the drivers are current (a dependency problem this
-                package cannot fix - see NOTES below), or the machine is not
-                a supported model (silent exit, no output).
+        Exit 0  The camera is healthy. Driver version information may appear
+                in the output as context, but does not affect the exit code.
+                Machines with cameras deliberately disabled (problem code 22)
+                also exit 0; this is a user choice, not a fault.
 
-        Exit 1  The machine needs remediation. At least one camera-stack
-                component is below its target version, or Intel hardware is
-                bound to a generic Windows inbox driver instead of the Intel
-                driver. The remediation script will attempt to fix this.
-
-    When the camera is broken but the drivers are current, the script prints
-    a BROKEN-CURRENT banner in its output explaining the dependency route
-    (Dell KB 000248760). This banner appears in the Intune detection-output
-    column, giving support staff visibility without triggering unnecessary
-    remediation cycles.
+        Exit 1  The camera is broken. At least one camera-stack device has
+                a nonzero problem code (10 = cannot start, 14 = needs restart,
+                28 = no driver, etc.), or no camera devices are present, or
+                Frame Server logged 5+ errors in the trailing week. The output
+                names the failing components and, when drivers are also
+                outdated, notes that remediation may help.
 
     The script never writes anything, starts anything, or stops anything.
     It is safe to run at any time, including during video calls.
@@ -418,39 +413,52 @@ $detailOutputLines | ForEach-Object { Write-Output $_ }
 # =============================================================================
 # EXIT CODE
 # =============================================================================
+# Exit 1 when the camera is broken, regardless of driver version. The version
+# and firmware findings are context printed in the output; they do not drive
+# the exit code. This matches the operational need: find machines whose
+# cameras don't work, not machines whose drivers are theoretically old.
 
-$needsRemediation = ($outdatedComponents.Count -gt 0) -or ($misboundComponents.Count -gt 0)
+$cameraIsBroken = ($activeDeviceProblems.Count -gt 0)
 
-if ($needsRemediation) {
-    # Print the specific findings so the Intune detection-output column shows
-    # exactly what is wrong, not just the exit code.
+if ($cameraIsBroken) {
+    # Print what is broken so the Intune detection-output column shows the
+    # specific problem, not just an exit code.
     Write-Output ''
-    Write-Output "REMEDIATION REQUIRED - $($outdatedComponents.Count + $misboundComponents.Count) finding(s):"
-    ($outdatedComponents + $misboundComponents) | ForEach-Object { Write-Output "  $_" }
-    if ($activeDeviceProblems) {
-        Write-Output "Also broken now: $($activeDeviceProblems -join '; ')"
+    Write-Output "CAMERA PROBLEM DETECTED - $($activeDeviceProblems.Count) finding(s):"
+    $activeDeviceProblems | ForEach-Object { Write-Output "  $_" }
+
+    # Context: are the drivers also outdated? Helps with diagnosis but does
+    # not change the verdict.
+    if ($outdatedComponents.Count -or $misboundComponents.Count) {
+        Write-Output ''
+        Write-Output "Driver context (informational, $($outdatedComponents.Count + $misboundComponents.Count) below target):"
+        ($outdatedComponents + $misboundComponents) | ForEach-Object { Write-Output "  $_" }
+        Write-Output 'Remediation may help: the driver package installs newer versions.'
+    } else {
+        Write-Output ''
+        Write-Output 'Drivers are at target. The fix is the dependency route (Dell KB 000248760):'
+        Write-Output 'BIOS camera enable, chipset, graphics, ISH, Serial I/O, ME.'
     }
-    if ($deliberatelyDisabled) {
-        Write-Output "Disabled by choice (not a fault): $($deliberatelyDisabled -join '; ')"
+
+    if ($deliberatelyDisabled.Count) {
+        Write-Output ''
+        Write-Output "Also disabled by choice (not a fault): $($deliberatelyDisabled -join '; ')"
     }
     exit 1
 }
 
-if ($activeDeviceProblems.Count) {
-    # Drivers are current but the camera is broken. This is a dependency
-    # problem (BIOS, chipset, ISH, etc.) that this package cannot fix.
-    # Print the route so it appears in the detection-output column.
-    Write-Output 'BROKEN-CURRENT: drivers at target but camera problems present -'
-    Write-Output 'dependency route (Dell KB 000248760): BIOS camera enable, chipset, graphics, ISH, Serial I/O, ME'
-    $activeDeviceProblems | ForEach-Object { Write-Output "  $_" }
-    if ($deliberatelyDisabled) { Write-Output "also-disabled (NOT a fault): $($deliberatelyDisabled -join '; ')" }
-    exit 0
-}
-
 if ($deliberatelyDisabled.Count) {
-    Write-Output "compliant ($stackDevicesAtTarget stack components at target); camera devices disabled by choice: $($deliberatelyDisabled -join '; ')"
+    Write-Output "Camera healthy; device(s) disabled by choice: $($deliberatelyDisabled -join '; ')"
+    if ($outdatedComponents.Count) {
+        Write-Output "Drivers below target (informational): $($outdatedComponents.Count) component(s)"
+    }
     exit 0
 }
 
-Write-Output "compliant ($stackDevicesAtTarget stack components at target)"
+# Camera is healthy. Report driver currency as context only.
+if ($outdatedComponents.Count -or $misboundComponents.Count) {
+    Write-Output "Camera healthy; $($outdatedComponents.Count + $misboundComponents.Count) driver(s) below target (informational, no action triggered):"
+    ($outdatedComponents + $misboundComponents) | ForEach-Object { Write-Output "  $_" }
+}
+Write-Output "Camera healthy ($stackDevicesAtTarget stack components detected)"
 exit 0
