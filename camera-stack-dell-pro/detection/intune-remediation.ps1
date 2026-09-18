@@ -64,10 +64,11 @@
        A tray-idle Teams instance does not count (it is not streaming).
 
     3. Package acquisition. The Dell driver package (HW9TN or 845M5 depending
-       on model family) is downloaded from dl.dell.com via HttpClient and verified:
+       on model family) is downloaded from dl.dell.com via a fallback chain
+       (HttpClient → Invoke-WebRequest → BITS) and verified:
        the Authenticode signature must be from Dell. A SHA-256 hash is also
        checked when one is published for the package. For air-gapped machines
-       or testing, the -LocalPackage parameter points to a local copy.
+       or testing.
 
     4. Extraction. The Dell Update Package is silently extracted using its
        built-in /s /e switches, yielding the raw driver INF files.
@@ -104,13 +105,11 @@
 # Path to a local copy of the driver package EXE, used instead of downloading.
 # For air-gapped machines or manual testing.
 param(
-    [string]$LocalPackage = '',
     [switch]$ShowToast,
-    [string]$ToastAppName  = 'IT Support',  # shown as the notification source (pass your org's name at deploy time)
-    [string]$ToastTitle    = '',             # optional: overrides default title
-    [string]$ToastMessage  = '',             # optional: overrides default body
-    [string]$ToastIcon     = '',             # optional: path to icon PNG (48x48, shown circular)
-    [string]$ToastBanner   = ''              # optional: path to banner PNG (364x180, hero image)
+    [string]$ToastTitle    = '',   # optional: overrides default title
+    [string]$ToastMessage  = '',   # optional: overrides default body
+    [string]$ToastIcon     = '',   # optional: path to icon PNG (48x48, shown circular)
+    [string]$ToastBanner   = ''    # optional: path to banner PNG (364x180, hero image)
 )
 
 # =============================================================================
@@ -261,16 +260,10 @@ Write-Output "Working folder: $workingFolder"
 # =============================================================================
 # PACKAGE ACQUISITION
 # =============================================================================
-# Order of preference: cached copy in the working folder, local override via
-# -LocalPackage, then download from Dell. The cache means the second and later
-# runs on the same machine skip the download entirely.
+# Order of preference: cached copy in the working folder, then download from Dell.
+# The cache means the second and later runs on the same machine skip the download entirely.
 
 $packageFilePath = Join-Path $workingFolder $selectedPackage.PackageFileName
-
-if (-not (Test-Path $packageFilePath) -and $LocalPackage -and (Test-Path $LocalPackage)) {
-    Copy-Item $LocalPackage $packageFilePath -Force
-    Write-Output "Using local package copy: $LocalPackage"
-}
 
 if (-not (Test-Path $packageFilePath)) {
     if (-not $selectedPackage.DownloadUrl) {
