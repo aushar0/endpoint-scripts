@@ -89,11 +89,6 @@ param([switch]$SkipModelGate)
 # are normal conditions on many machines, not errors. The script handles each.
 $ErrorActionPreference = 'SilentlyContinue'
 
-# Detail lines are buffered here and printed after the headline. This keeps the
-# most important information first in the output, which matters because the
-# Intune portal's detection-output column may truncate anything below the fold.
-$detailOutputLines = @()
-
 # =============================================================================
 # HARDWARE GATE
 # =============================================================================
@@ -109,7 +104,7 @@ $modelSignature = @($systemProduct.Version, $systemProduct.Name, $baseBoard.Prod
 
 if ($modelSignature -notmatch 'P[AB]14250') {
     if ($SkipModelGate) {
-        $detailOutputLines += "GATE-BYPASSED: [$modelSignature]"
+        Write-Output "GATE-BYPASSED: [$modelSignature]"
     } else {
         # Not a supported model. Exit silently so the machine does not appear
         # as non-compliant in the Intune reporting.
@@ -325,14 +320,6 @@ $hoursBetweenUpgradeAndFirstError = if ($firstFrameServerError) {
     $null
 }
 
-$detailOutputLines += ("HW9TN|ctx|bios={0}|build={1}|os_changed={2:yyyy-MM-dd}|winold={3}" -f `
-    (Get-CimInstance Win32_BIOS).SMBIOSBIOSVersion,
-    $operatingSystem.BuildNumber,
-    $operatingSystem.InstallDate,
-    (Test-Path 'C:\Windows.old'))
-
-# Dependency versions (ISH, Serial I/O, Management Engine) - missing values
-# point to the KB 000248760 dependency route.
 $dependencyNameMap = @{
     'Integrated Sensor Solution' = 'ish'
     'Serial IO'                  = 'serialio'
@@ -343,12 +330,6 @@ $dependencyLines = foreach ($searchName in $dependencyNameMap.Keys) {
     $depVersion = if ($depDevice) { $driverInfoByDeviceId[$depDevice.PNPDeviceID].DriverVersion } else { $null }
     '{0}={1}' -f $dependencyNameMap[$searchName], $(if ($depVersion) { $depVersion } else { 'missing' })
 }
-$detailOutputLines += ('HW9TN|dep|' + ($dependencyLines -join '|'))
-
-$detailOutputLines += ("HW9TN|rca|first_err={0}|upgraded={1:yyyy-MM-dd HH:mm}|delta={2}" -f `
-    $(if ($firstFrameServerError) { $firstFrameServerError.TimeCreated.ToString('yyyy-MM-ddTHH:mm') } else { 'none-in-retention' }),
-    $operatingSystem.InstallDate,
-    $(if ($null -ne $hoursBetweenUpgradeAndFirstError) { "{0}h" -f $hoursBetweenUpgradeAndFirstError } else { 'n/a' }))
 
 # =============================================================================
 # FIRMWARE PAYLOAD CHECK
@@ -373,9 +354,6 @@ foreach ($registryRoot in 'HKLM:\SYSTEM\CurrentControlSet\Enum\ACPI\INTC10E0',
 
 if ($currentFirmwareVersion -and ([version]$currentFirmwareVersion -lt [version]$minimumFirmwareProxyVersion)) {
     $outdatedComponents += "vision-firmware-extension: $currentFirmwareVersion -> $minimumFirmwareProxyVersion"
-    $detailOutputLines += "HW9TN|fw|proxy=$currentFirmwareVersion|target>=$minimumFirmwareProxyVersion|state=OLD"
-} elseif ($currentFirmwareVersion) {
-    $detailOutputLines += "HW9TN|fw|proxy=$currentFirmwareVersion|target>=$minimumFirmwareProxyVersion|state=CURRENT"
 }
 
 # =============================================================================
@@ -403,145 +381,82 @@ $problemCodeMeanings = @{
 }
 
 if ($activeDeviceProblems.Count -gt 0) {
-    $detailOutputLines += ''
-    $detailOutputLines += '--- root cause (from Windows driver-install history) ---'
-
-    # Translate each finding's problem code to a readable cause.
-    foreach ($finding in $activeDeviceProblems) {
-        $componentName = ($finding -split ' code ')[0]
-        $problemCode   = ($finding -split ' code ')[-1]
-        $meaning = if ($problemCodeMeanings[[int]$problemCode]) { $problemCodeMeanings[[int]$problemCode] } else { 'unknown' }
-        $detailOutputLines += "  $componentName : code $problemCode ($meaning)"
-    }
-
     # Search setupapi.dev.log for NTSTATUS codes related to the failing
     # camera components. The NTSTATUS tells the deeper "why" beyond the
-    # problem-code label (e.g., power failure vs driver install failure).
+    # problem-code label (e.g., 0xC00000E5 = power failure).
     $cameraInfPattern = 'iacamera|hm1092|ov08x40|ov05c10|iactrllogic|iaisp|usbbridge|Vision\.inf'
     $setupapiFindings = @(Select-String -Path 'C:\Windows\INF\setupapi.dev.log' `
         -Pattern $cameraInfPattern -ErrorAction SilentlyContinue |
         Where-Object { $_.Line -match '0x[0-9a-fA-F]{8}|status|error|fail' } |
         Select-Object -Last 8)
 
-    if ($setupapiFindings.Count -gt 0) {
-        $detailOutputLines += '  NTSTATUS codes from setupapi.dev.log (most recent):'
-        foreach ($line in $setupapiFindings) {
-            # Compact: just the line number and the relevant text, truncated
-            $lineText = $line.Line.Trim()
-            if ($lineText.Length -gt 120) { $lineText = $lineText.Substring(0, 120) + '...' }
-            $detailOutputLines += "    line $($line.LineNumber): $lineText"
-        }
-    } else {
-        # Also check setupapi.app.log (some install events land there)
+    $setupapiAppFindings = @()
+    if ($setupapiFindings.Count -eq 0) {
         $setupapiAppFindings = @(Select-String -Path 'C:\Windows\INF\setupapi.app.log' `
             -Pattern $cameraInfPattern -ErrorAction SilentlyContinue |
             Where-Object { $_.Line -match '0x[0-9a-fA-F]{8}|status|error|fail' } |
             Select-Object -Last 5)
-
-        if ($setupapiAppFindings.Count -gt 0) {
-            $detailOutputLines += '  NTSTATUS codes from setupapi.app.log (most recent):'
-            foreach ($line in $setupapiAppFindings) {
-                $lineText = $line.Line.Trim()
-                if ($lineText.Length -gt 120) { $lineText = $lineText.Substring(0, 120) + '...' }
-                $detailOutputLines += "    line $($line.LineNumber): $lineText"
-            }
-        } else {
-            $detailOutputLines += '  (no NTSTATUS entries found in setupapi logs for camera components)'
-        }
     }
 }
 
 # =============================================================================
-# OUTPUT
+# OUTPUT (2-3 dense lines; designed for Intune's truncating column)
 # =============================================================================
-# The headline goes first because the Intune portal's detection-output column
-# may truncate. Everything a support engineer needs to triage is in this one
-# line: what needs updating, what is broken, firmware state, upgrade recency,
-# and the Frame Server error count.
-#
-# BROKEN is driven by device problem codes (10 = cannot start, 14 = needs
-# restart, 28 = no driver, etc.), NOT by Frame Server errors. A dead camera
-# often generates zero Frame Server events because there is nothing to connect
-# to. fsErr7d is a supplementary signal that catches intermittent failures on
-# cameras that otherwise report a clean problem code.
+# Every field is either a verdict signal or a commonality data point.
+# No headers, no blank lines, no repeated information.
 
-# The verdict word reflects the camera's health, not the driver version state.
+# --- Line 1: verdict + failing components + commonality context ---
 $verdictHeadline = if ($activeDeviceProblems.Count) {
-    "CAMERA_BROKEN($($activeDeviceProblems.Count))"
+    $shortNames = ($activeDeviceProblems | ForEach-Object {
+        ($_ -split ' code ')[0] -replace '-PB-ARL','' -replace '-PB-LNL','' -replace '-PB',''
+    } | Select-Object -Unique) -join ','
+    "CAMERA_BROKEN($($activeDeviceProblems.Count)):$shortNames"
 } elseif ($deliberatelyDisabled.Count) {
     'CAMERA_DISABLED'
 } else {
     'CAMERA_OK'
 }
+if ($outdatedComponents.Count -or $misboundComponents.Count) { $verdictHeadline += "|drv_old" }
+$verdictHeadline += "|fw:$(if ($currentFirmwareVersion) { $currentFirmwareVersion } else { 'n/a' })"
+$verdictHeadline += "|bld:$($operatingSystem.BuildNumber)|upg:$($operatingSystem.InstallDate.ToString('yyyy-MM-dd'))"
+Write-Output $verdictHeadline
 
-# Driver version context: shown in the headline when components are below
-# target. This is informational and does not affect the exit code.
-if ($outdatedComponents.Count -or $misboundComponents.Count) {
-    $outdatedComponentNames = (@($outdatedComponents + $misboundComponents) | ForEach-Object { ($_ -split ':')[0] }) -join ','
-    $verdictHeadline += " | DRIVERS_OUTDATED($($outdatedComponents.Count + $misboundComponents.Count)): $outdatedComponentNames"
+# --- Line 2: per-component cause + NTSTATUS (broken machines only) ---
+if ($activeDeviceProblems.Count) {
+    $causeSegments = @()
+    $seenComponents = @{}
+    foreach ($finding in $activeDeviceProblems) {
+        $componentName = ($finding -split ' code ')[0]
+        if ($seenComponents[$componentName]) { continue }
+        $seenComponents[$componentName] = $true
+        $problemCode = ($finding -split ' code ')[-1]
+        $meaning = if ($problemCodeMeanings[[int]$problemCode]) { ($problemCodeMeanings[[int]$problemCode] -replace ' ','_') } else { 'unknown' }
+        $shortName = $componentName -replace '-PB-ARL','' -replace '-PB-LNL','' -replace '-PB',''
+        $causeSegments += "$shortName=$problemCode($meaning)"
+    }
+    # Attach NTSTATUS codes from setupapi when present (the deeper "why")
+    $allSetupapiHits = @($setupapiFindings) + @($setupapiAppFindings)
+    $ntStatusCodes = @($allSetupapiHits | ForEach-Object {
+        if ($_.Line -match '(0x[0-9a-fA-F]{8})') { $Matches[1] }
+    } | Select-Object -Unique | Select-Object -First 2)
+    if ($ntStatusCodes) { $causeSegments += "ntstatus:$($ntStatusCodes -join ',')" }
+    Write-Output ($causeSegments -join ' ')
 }
 
-# Broken component details (already in the verdict word above via the count,
-# but the names help identify which specific devices are failing).
-$brokenComponentNames = (@($activeDeviceProblems) | ForEach-Object { ($_ -split ' ')[0] }) -join ','
-if ($brokenComponentNames) { $verdictHeadline += " | failing: $brokenComponentNames" }
-$verdictHeadline += " | fw:$(if ($currentFirmwareVersion) { $currentFirmwareVersion } else { 'n/a' })"
-$verdictHeadline += " | upg:$($operatingSystem.InstallDate.ToString('yyyy-MM-dd'))"
-$verdictHeadline += " | fsErr7d:$frameServerErrorCount"
-
-Write-Output $verdictHeadline
-Write-Output ''
-$detailOutputLines | ForEach-Object { Write-Output $_ }
+# --- Line 3: commonality data (driver currency, dependencies, first error) ---
+$contextSegments = @()
+if ($outdatedComponents.Count) { $contextSegments += "drv:$($outdatedComponents.Count)_old" }
+elseif ($misboundComponents.Count) { $contextSegments += 'drv:misbound' }
+else { $contextSegments += 'drv:current' }
+$contextSegments += "dep:$(if ($dependencyLines) { $dependencyLines -join ',' } else { 'n/a' })"
+if ($firstFrameServerError) {
+    $contextSegments += "first_err:$($firstFrameServerError.TimeCreated.ToString('MM-dd'))(+${hoursBetweenUpgradeAndFirstError}h)"
+}
+if ($contextSegments.Count) { Write-Output ($contextSegments -join '|') }
 
 # =============================================================================
 # EXIT CODE
 # =============================================================================
-# Exit 1 when the camera is broken, regardless of driver version. The version
-# and firmware findings are context printed in the output; they do not drive
-# the exit code. This matches the operational need: find machines whose
-# cameras don't work, not machines whose drivers are theoretically old.
 
-$cameraIsBroken = ($activeDeviceProblems.Count -gt 0)
-
-if ($cameraIsBroken) {
-    # Print what is broken so the Intune detection-output column shows the
-    # specific problem, not just an exit code.
-    Write-Output ''
-    Write-Output "CAMERA PROBLEM DETECTED - $($activeDeviceProblems.Count) finding(s):"
-    $activeDeviceProblems | ForEach-Object { Write-Output "  $_" }
-
-    # Context: are the drivers also outdated? Helps with diagnosis but does
-    # not change the verdict.
-    if ($outdatedComponents.Count -or $misboundComponents.Count) {
-        Write-Output ''
-        Write-Output "Driver context (informational, $($outdatedComponents.Count + $misboundComponents.Count) below target):"
-        ($outdatedComponents + $misboundComponents) | ForEach-Object { Write-Output "  $_" }
-        Write-Output 'Remediation may help: the driver package installs newer versions.'
-    } else {
-        Write-Output ''
-        Write-Output 'Drivers are at target. The fix is the dependency route (Dell KB 000248760):'
-        Write-Output 'BIOS camera enable, chipset, graphics, ISH, Serial I/O, ME.'
-    }
-
-    if ($deliberatelyDisabled.Count) {
-        Write-Output ''
-        Write-Output "Also disabled by choice (not a fault): $($deliberatelyDisabled -join '; ')"
-    }
-    exit 1
-}
-
-if ($deliberatelyDisabled.Count) {
-    Write-Output "Camera healthy; device(s) disabled by choice: $($deliberatelyDisabled -join '; ')"
-    if ($outdatedComponents.Count) {
-        Write-Output "Drivers below target (informational): $($outdatedComponents.Count) component(s)"
-    }
-    exit 0
-}
-
-# Camera is healthy. Report driver currency as context only.
-if ($outdatedComponents.Count -or $misboundComponents.Count) {
-    Write-Output "Camera healthy; $($outdatedComponents.Count + $misboundComponents.Count) driver(s) below target (informational, no action triggered):"
-    ($outdatedComponents + $misboundComponents) | ForEach-Object { Write-Output "  $_" }
-}
-Write-Output "Camera healthy ($stackDevicesAtTarget stack components detected)"
+if ($activeDeviceProblems.Count -gt 0) { exit 1 }
 exit 0
