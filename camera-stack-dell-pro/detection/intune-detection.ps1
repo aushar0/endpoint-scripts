@@ -294,9 +294,11 @@ $frameServerErrorCount = @(Get-WinEvent -FilterHashtable @{
     Level     = 1, 2, 3
     StartTime = (Get-Date).AddDays(-7)
 }).Count
-if ($frameServerErrorCount -ge 5) {
-    $activeDeviceProblems += "$frameServerErrorCount Frame Server errors in the trailing 7 days"
-}
+# Frame Server errors are a LAGGING indicator: they persist in the event log
+# for up to 7 days after a camera has been fixed. A machine that was broken
+# yesterday and remediated this morning still has yesterday's errors in the
+# window, causing a false positive. Do NOT let these drive the exit code.
+# They are printed in the output as diagnostic context only.
 
 # =============================================================================
 # ROOT-CAUSE CONTEXT
