@@ -64,7 +64,7 @@
        A tray-idle Teams instance does not count (it is not streaming).
 
     3. Package acquisition. The Dell driver package (HW9TN or 845M5 depending
-       on model family) is downloaded from dl.dell.com via BITS and verified:
+       on model family) is downloaded from dl.dell.com via HttpClient and verified:
        the Authenticode signature must be from Dell. A SHA-256 hash is also
        checked when one is published for the package. For air-gapped machines
        or testing, the -LocalPackage parameter points to a local copy.
@@ -195,14 +195,16 @@ if (-not (Test-Path $packageFilePath)) {
         Write-Output "No download URL configured for package $($selectedPackage.PackageId). Exiting."
         exit 1
     }
-    Write-Output "Downloading $($selectedPackage.PackageFileName) via BITS..."
+    Write-Output "Downloading $($selectedPackage.PackageFileName)..."
     try {
-        # Download via HttpClient (streamed, no BITS service dependency).
-        # BITS requires the Windows BITS service to be running, which may be
-        # disabled on locked-down machines. HttpClient works in any context.
+        # Download via HttpClient with streaming (works in any context,
+        # no Windows service dependencies). User-Agent header is required
+        # because Dell's CDN rejects requests without one (403 Forbidden).
         Add-Type -AssemblyName System.Net.Http
         $httpClient = [System.Net.Http.HttpClient]::new()
         $httpClient.Timeout = [TimeSpan]::FromMinutes(10)
+        # Dell's CDN returns 403 without a browser-like User-Agent header.
+        $httpClient.DefaultRequestHeaders.Add('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
         $httpResponse = $httpClient.GetAsync($selectedPackage.DownloadUrl, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
         $httpResponse.EnsureSuccessStatusCode()
         $downloadStream = $httpResponse.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
