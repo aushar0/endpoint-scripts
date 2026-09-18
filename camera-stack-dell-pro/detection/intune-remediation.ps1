@@ -282,13 +282,25 @@ function Show-RestartToast {
     Unregister-ScheduledTask -TaskName 'CameraDriverToast' -Confirm:$false -ErrorAction SilentlyContinue
 }
 
-function Test-CameraStreaming {
+function Test-DeviceInUse {
+    # Checks whether any application is actively using the camera OR microphone
+    # via the Windows CapabilityAccessManager consent store. The registry value
+    # LastUsedTimeStop is 0 while an app is streaming and a timestamp when it
+    # stops. This catches Teams, Zoom, WebEx, Chrome, Edge, Discord, and anything
+    # else that uses the camera or microphone.
+    #
+    # Checking the microphone catches audio-only calls (camera off) so the
+    # remediation never runs during any type of call, even though camera driver
+    # installation technically does not affect the audio path.
     foreach ($userHive in (Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue)) {
-        $consentStorePath = "$($userHive.PSPath)\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam"
-        if (-not (Test-Path $consentStorePath)) { continue }
-        foreach ($appEntry in (Get-ChildItem "$consentStorePath\*", "$consentStorePath\NonPackaged\*" -ErrorAction SilentlyContinue)) {
-            if ((Get-ItemProperty $appEntry.PSPath -ErrorAction SilentlyContinue).LastUsedTimeStop -eq 0) {
-                return $true
+        foreach ($sensorType in 'webcam', 'microphone') {
+            $consentStorePath = "$($userHive.PSPath)\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$sensorType"
+            if (-not (Test-Path $consentStorePath)) { continue }
+            foreach ($appEntry in (Get-ChildItem "$consentStorePath\*", "$consentStorePath\NonPackaged\*" -ErrorAction SilentlyContinue)) {
+                if ((Get-ItemProperty $appEntry.PSPath -ErrorAction SilentlyContinue).LastUsedTimeStop -eq 0) {
+                    $script:deviceInUseBy = "{0}:{1}" -f $sensorType, $appEntry.PSChildName
+                    return $true
+                }
             }
         }
     }
@@ -298,18 +310,18 @@ function Test-CameraStreaming {
 $waitDeadline = (Get-Date).AddMinutes($MaxWaitMinutes)
 $pollAttempt  = 0
 
-while ((Get-Date) -lt $waitDeadline -and (Test-CameraStreaming)) {
+while ((Get-Date) -lt $waitDeadline -and (Test-DeviceInUse)) {
     $pollAttempt++
-    Write-Output "Camera in use. Waiting ${PollMinutes} minutes (attempt $pollAttempt)."
+    Write-Output "Camera or microphone in use ($deviceInUseBy). Waiting ${PollMinutes} minutes (attempt $pollAttempt)."
     Start-Sleep -Seconds ($PollMinutes * 60)
 }
 
-if (Test-CameraStreaming) {
-    Write-Output "Camera stayed in use for the full ${MaxWaitMinutes} minutes. No changes made."
+if (Test-DeviceInUse) {
+    Write-Output "Camera or microphone stayed in use for the full ${MaxWaitMinutes} minutes. No changes made."
     Write-Output 'The next scheduled run will retry.'
     exit 0
 }
-Write-Output 'Camera is idle. Proceeding with installation.'
+Write-Output 'Camera and microphone are idle. Proceeding with installation.'
 
 # =============================================================================
 # DRIVER INSTALLATION
