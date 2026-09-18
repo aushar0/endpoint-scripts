@@ -83,7 +83,7 @@ Try {
     [string]$appArch          = 'x64'
     [string]$appLang          = 'EN'
     [string]$appRevision      = '01'
-    [string]$appScriptVersion = '1.2.0'
+    [string]$appScriptVersion = '1.2.1'
     [string]$appScriptDate    = '2026-09-18'
     [string]$appScriptAuthor  = 'endpoint engineering'
 
@@ -193,6 +193,7 @@ Function Get-RhDownloadedInstaller {
         Write-Log -Message "Remote Help: download lane OK - signer Microsoft Corporation, size=$((Get-Item -LiteralPath $dlPath).Length) bytes, path=[$dlPath]."
         Return $dlPath
     }
+
     Catch {
         Write-Log -Message "Remote Help: download lane FAILED - $($_.Exception.Message)"
         Remove-Item -LiteralPath $dlPath -Force -ErrorAction SilentlyContinue
@@ -218,6 +219,7 @@ Function Get-RhLocalInstaller {
 
         Return $script:rhLocalCopy
     }
+
     Catch {
         Write-Log -Message "Remote Help: local lane FAILED - $($_.Exception.Message)"
         Return $null
@@ -328,10 +330,12 @@ If ($DeploymentType -ine 'Uninstall' -and $DeploymentType -ine 'Repair') {
     [String]$installPhase = 'Installation'
 
     ## <Perform Installation tasks here>
+
     Try {
         Write-Log -Message "Starting installation of [$appVendor $appName $appVersion] via [$script:rhInstaller] with params [$rhInstallParams]..."
         Execute-Process -Path $script:rhInstaller -Parameters $rhInstallParams -IgnoreExitCodes '3010,1641'
     }
+
     Catch {
         [int32]$mainExitCode = 60002
         Write-RhSummary "failed-$mainExitCode"
@@ -345,6 +349,7 @@ If ($DeploymentType -ine 'Uninstall' -and $DeploymentType -ine 'Repair') {
     [String]$installPhase = 'Post-Installation'
 
     ## <Perform Post-Installation tasks here>
+
     ## Burn ground truth: the bootstrapper can exit 0 without installing -
     ## verify the binary actually landed before claiming success.
     Try {
@@ -361,6 +366,7 @@ If ($DeploymentType -ine 'Uninstall' -and $DeploymentType -ine 'Repair') {
         Write-RhSummary 'success'
         Write-Log -Message "Installation of [$appName $appVersion] complete."
     }
+
     Catch {
         [int32]$mainExitCode = 60002
         Write-RhSummary "failed-$mainExitCode"
@@ -391,6 +397,7 @@ ElseIf ($DeploymentType -ieq 'Uninstall') {
     [String]$installPhase = 'Uninstallation'
 
     ## <Perform Uninstallation tasks here>
+
     ## Idempotent uninstall: nothing on disk, nothing to remove.
     Try {
         If (-not (Test-Path -LiteralPath $script:rhInstalledExe)) {
@@ -403,6 +410,7 @@ ElseIf ($DeploymentType -ieq 'Uninstall') {
         ## Burn stub can exit before cleanup finishes - grace-poll in Post-Uninstallation.
         Execute-Process -Path $script:rhInstaller -Parameters $rhUninstallParams -IgnoreExitCodes '3010,1641'
     }
+
     Catch {
         [int32]$mainExitCode = 60004
         Write-RhSummary "failed-$mainExitCode"
@@ -416,6 +424,7 @@ ElseIf ($DeploymentType -ieq 'Uninstall') {
     [String]$installPhase = 'Post-Uninstallation'
 
     ## <Perform Post-Uninstallation tasks here>
+
     ## Grace-poll the async Burn stub, then log the residue census
     ## (WebView2 surviving is documented behavior, not chased).
     Try {
@@ -440,6 +449,7 @@ ElseIf ($DeploymentType -ieq 'Uninstall') {
         Write-Log -Message "Uninstall of [$appName $appVersion] complete."
         Exit-Script -ExitCode $mainExitCode
     }
+
     Catch {
         [int32]$mainExitCode = 60004
         Write-RhSummary "failed-$mainExitCode"
@@ -471,10 +481,12 @@ ElseIf ($DeploymentType -ieq 'Repair') {
     [String]$installPhase = 'Repair'
 
     ## <Perform Repair tasks here>
+
     Try {
         Write-Log -Message "Starting repair (in-place reinstall) of [$appName $appVersion]..."
         Execute-Process -Path $script:rhInstaller -Parameters $rhInstallParams -IgnoreExitCodes '3010,1641'
     }
+
     Catch {
         [int32]$mainExitCode = 60003
         Write-RhSummary "failed-$mainExitCode"
@@ -488,6 +500,7 @@ ElseIf ($DeploymentType -ieq 'Repair') {
     [String]$installPhase = 'Post-Repair'
 
     ## <Perform Post-Repair tasks here>
+
     ## Same Burn ground-truth rule as install.
     Try {
         If (-not (Test-Path -LiteralPath $script:rhInstalledExe)) {
@@ -502,6 +515,7 @@ ElseIf ($DeploymentType -ieq 'Repair') {
         Write-RhSummary 'success'
         Write-Log -Message "Repair of [$appName $appVersion] complete."
     }
+
     Catch {
         [int32]$mainExitCode = 60003
         Write-RhSummary "failed-$mainExitCode"
