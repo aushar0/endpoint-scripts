@@ -187,12 +187,32 @@ Try {
         Return $true
     }
 
+    function Test-OrbInstallerAccept ([string]$Path) {
+        ## Acceptance for the STAGED fallback = pin match OR a valid Orb
+        ## Forge signature (a signature-gated fresh download is legitimate
+        ## fallback content - the vendor URL rotates by design).
+        If ($expectedSha256 -and (Get-FileHash -LiteralPath $Path -Algorithm 'SHA256').Hash -eq $expectedSha256.ToUpper()) { return $true }
+        $sig = Get-AuthenticodeSignature -FilePath $Path
+        return ($sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -like '*Orb Forge*')
+    }
+
+    function Add-OrbFallbackSeed ([string]$Source) {
+        ## Empty-Fallback self-fill: seed Files\Fallback from a TRUSTED
+        ## download so the package content completes itself. Never
+        ## overwrites an existing fallback - delete it to force a refresh.
+        If (-not (Test-Path -LiteralPath $script:fbTarget)) {
+            New-Item -Path $script:dirFallback -ItemType Directory -Force | Out-Null
+            Copy-Item -LiteralPath $Source -Destination $script:fbTarget -Force
+            Write-Log -Message "ORB_PAYLOAD seeded [$script:fbTarget] from the trusted download (fallback was empty)."
+        }
+    }
+
     function Get-OrbPayload {
         ## Resolves [$script:orbInstaller] to a TRUSTED payload path.
         $staged = @($script:fbTarget, $script:orbInstaller) | Where-Object { Test-Path -LiteralPath $_ -PathType 'Leaf' }
         $stagedOk = $null
         Foreach ($s in $staged) {
-            If (Test-OrbInstallerPin $s) { $stagedOk = $s; break }
+            If (Test-OrbInstallerAccept $s) { $stagedOk = $s; break }
         }
 
         If ($downloadStance -in @('download-first', 'download-only')) {
@@ -202,6 +222,7 @@ Try {
                     ## Re-run cache: exists-check - gate and reuse.
                     Test-OrbInstallerSig $script:dlTarget
                     Write-Log -Message "ORB_PAYLOAD source=download-cache [$($script:dlTarget)] (signature gate passed)."
+                    Add-OrbFallbackSeed $script:dlTarget
                     $script:orbInstaller = $script:dlTarget
                     Return
                 }
@@ -214,6 +235,7 @@ Try {
                 Test-OrbInstallerSig $script:dlTarget
                 $null = Test-OrbInstallerPin $script:dlTarget   # drift = logged, signature already passed
                 Write-Log -Message 'ORB_PAYLOAD source=download (Authenticode gate passed).'
+                Add-OrbFallbackSeed $script:dlTarget
                 $script:orbInstaller = $script:dlTarget
                 Return
             }

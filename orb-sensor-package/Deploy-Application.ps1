@@ -182,6 +182,16 @@ Try {
         return ((Get-FileHash -LiteralPath $Path -Algorithm 'SHA256').Hash -eq $zipSha256.ToUpper())
     }
 
+    function Add-OrbFallbackSeed ([string]$Source) {
+        ## Empty-Fallback self-fill from a PIN-TRUSTED source. Never
+        ## overwrites an existing fallback - delete it to force a refresh.
+        If (-not (Test-Path -LiteralPath $script:fbTarget)) {
+            New-Item -Path $script:dirFallback -ItemType Directory -Force | Out-Null
+            Copy-Item -LiteralPath $Source -Destination $script:fbTarget -Force
+            Write-Log -Message "ORBSENSOR_PAYLOAD seeded [$script:fbTarget] from the trusted download (fallback was empty)."
+        }
+    }
+
     function Get-OrbSensorZip {
         ## Resolves [$script:orbZip] to a PIN-TRUSTED payload path.
         $staged = @($script:fbTarget, $script:orbZip) | Where-Object { Test-Path -LiteralPath $_ -PathType 'Leaf' }
@@ -197,6 +207,7 @@ Try {
                     ## Re-run cache: exists-check - pin and reuse.
                     If (-not (Test-OrbZipPin $script:dlTarget)) { Throw 'cached download zip no longer matches the pin' }
                     Write-Log -Message "ORBSENSOR_PAYLOAD source=download-cache [$($script:dlTarget)] (matches pin)."
+                    Add-OrbFallbackSeed $script:dlTarget
                     $script:orbZip = $script:dlTarget
                     Return
                 }
@@ -220,6 +231,7 @@ Try {
                     Throw "download drifted from the pin and no staged fallback exists - refusing unverified bytes (re-pin after a known-good download, or stage the zip)."
                 }
                 Write-Log -Message 'ORBSENSOR_PAYLOAD source=download (hash matches pin).'
+                Add-OrbFallbackSeed $script:dlTarget
                 $script:orbZip = $script:dlTarget
                 Return
             }
