@@ -278,22 +278,39 @@ Write-Output 'Package verified (Dell-signed).'
 # PACKAGE EXTRACTION
 # =============================================================================
 # The Dell Update Package supports silent extraction via /s /e /f=<folder>.
-# The extracted tree contains the raw INF/SYS/CAT files under .\16299\Drivers\.
+# The Dell extractor may or may not create a 16299 subfolder (7-Zip does,
+# Dell's own extractor may extract directly). Search recursively for INF
+# files regardless of the internal folder structure.
 
 $extractionFolder = Join-Path $workingFolder 'extract'
 
-if (-not (Test-Path "$extractionFolder\16299")) {
+# Check if we already have extracted INF files (cache from a previous run)
+$cachedInfFiles = @(Get-ChildItem $extractionFolder -Recurse -Filter *.inf -ErrorAction SilentlyContinue)
+
+if ($cachedInfFiles.Count -eq 0) {
     New-Item -ItemType Directory -Force -Path $extractionFolder | Out-Null
     Write-Output 'Extracting driver package (silent extraction)...'
     $extractionProcess = Start-Process -FilePath $packageFilePath `
         -ArgumentList "/s /e /f=`"$extractionFolder`"" `
         -Wait -PassThru -WindowStyle Hidden
     Write-Output "Extraction exit code: $($extractionProcess.ExitCode)"
+    # List what the extractor actually created (for troubleshooting)
+    $extractedContents = @(Get-ChildItem $extractionFolder -Recurse -ErrorAction SilentlyContinue)
+    Write-Output "Extraction produced $($extractedContents.Count) files."
 }
 
-$driverInfFiles = @(Get-ChildItem "$extractionFolder\16299\Drivers" -Recurse -Filter *.inf)
+# Search recursively for INF files — works regardless of folder structure
+$driverInfFiles = @(Get-ChildItem $extractionFolder -Recurse -Filter *.inf -ErrorAction SilentlyContinue)
 if ($driverInfFiles.Count -eq 0) {
-    Write-Output 'No INF files found after extraction. The package layout may have changed.'
+    Write-Output 'No INF files found after extraction. The package may have extracted to an unexpected location.'
+    # List top-level contents to help diagnose
+    $topLevel = @(Get-ChildItem $extractionFolder -ErrorAction SilentlyContinue)
+    if ($topLevel.Count -gt 0) {
+        Write-Output 'Extraction folder contents:'
+        $topLevel | Select-Object -First 10 | ForEach-Object { Write-Output "  $($_.Name)" }
+    } else {
+        Write-Output 'Extraction folder is empty.'
+    }
     exit 1
 }
 Write-Output "Driver payload ready: $($driverInfFiles.Count) INF files."
