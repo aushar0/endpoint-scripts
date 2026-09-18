@@ -17,10 +17,12 @@ true-positive x3, true-negative x4). v1.1.x (2026-09-18): two-lane
 installer acquire in the Lenovo-style folder layout (`Files\Download\`
 runtime fetch + `Files\Fallback\` staged copy) — download-lane live probe
 plus a 6-check acquire harness, all green (no install executed in that
-pass; see [Test ledger](#test-ledger)). v1.2.0: readability pass — the
+pass; see [Test ledger](#test-ledger)). v1.2.x: readability pass — the
 wrapper follows the stock 3.10.1 template layout (phase banners,
 `## <Perform X tasks here>` markers, helpers in one section); zero
-behavior change, harness re-run 6/6. Not lab-testable: tenant
+behavior change, harness re-run 6/6. v1.3.0: self-populating fallback —
+the verified download is copied into `Files\Fallback\` automatically
+(harness A2: populated + byte-identical). Not lab-testable: tenant
 authentication, licensing, and session behavior.
 
 ## Contents
@@ -87,8 +89,13 @@ and `Fallback\` (your staged copy; unarmed when empty):
   `curl.exe`, landing it in `Files\Download\`. The gate is the
   **Authenticode signature** (status Valid and
   signer Microsoft Corporation), because the link rotates and a hash
-  cannot pre-pin a rotating target. On any failure (network, proxy,
-  signature) it falls back to the staged copy.
+  cannot pre-pin a rotating target. Every verified fetch is also copied
+  into `Files\Fallback\` (self-staging): an empty fallback fills itself on
+  first install, and a stale copy is replaced automatically on version
+  rotation — to force a re-stage, just delete the Fallback copy. The
+  populate log line prints the SHA-256 to paste into `$expectedSha256` if
+  you want to lock (pin) that build. On any download failure (network,
+  proxy, signature) it falls back to the staged copy.
 - **`local-first`** — the staged `Files\Fallback\` copy wins (gate =
   SHA-256 pin); download only when nothing is staged.
 - **`local-only`** — never touches the network (air-gapped fleets).

@@ -32,7 +32,11 @@
     the link rotates and a hash cannot pre-pin a rotating target - with
     fallback to the staged copy in Files\Fallback\remotehelpinstaller.exe,
     which the $expectedSha256 pin guards instead (that folder is OPTIONAL:
-    empty = unarmed, the download lane covers it). 'local-first' prefers
+    empty = unarmed, the download lane covers it - and the download lane
+    POPULATES it: every verified fetch is copied into Files\Fallback\, so
+    an empty fallback fills itself on first install and a stale copy is
+    replaced on version rotation; to force a re-stage, just delete the
+    Fallback copy). 'local-first' prefers
     the staged copy; 'local-only' never touches the network. Exit 60005 =
     no installer obtainable from any lane.
 
@@ -83,7 +87,7 @@ Try {
     [string]$appArch          = 'x64'
     [string]$appLang          = 'EN'
     [string]$appRevision      = '01'
-    [string]$appScriptVersion = '1.2.1'
+    [string]$appScriptVersion = '1.3.0'
     [string]$appScriptDate    = '2026-09-18'
     [string]$appScriptAuthor  = 'endpoint engineering'
 
@@ -191,6 +195,23 @@ Function Get-RhDownloadedInstaller {
         }
 
         Write-Log -Message "Remote Help: download lane OK - signer Microsoft Corporation, size=$((Get-Item -LiteralPath $dlPath).Length) bytes, path=[$dlPath]."
+
+        ## Populate Files\Fallback\ from the verified download (self-staging):
+        ## an empty Fallback folder fills itself; a stale pinned copy is
+        ## replaced by the fresh verified build. Version-rotation reset =
+        ## just delete the Fallback copy - the next download re-populates it.
+        ## Failure to copy is logged, never fatal (the download is already
+        ## verified and in use).
+        Try {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Path $script:rhLocalCopy -Parent) | Out-Null
+            Copy-Item -LiteralPath $dlPath -Destination $script:rhLocalCopy -Force
+            [string]$rhStagedHash = (Get-FileHash -Path $script:rhLocalCopy -Algorithm 'SHA256').Hash
+            Write-Log -Message "Remote Help: Fallback\ populated from verified download - re-pin hash if locking this build: $rhStagedHash"
+        }
+        Catch {
+            Write-Log -Message "Remote Help: Fallback\ population skipped - $($_.Exception.Message)"
+        }
+
         Return $dlPath
     }
 
